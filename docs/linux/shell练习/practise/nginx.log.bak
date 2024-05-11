@@ -1,0 +1,19 @@
+11
+hell2o
+12
+h1i
+13
+14
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.2.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.2.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
+192.168.56.1 - - [21/May/2018:20:44:06 -0400] "GET /index.html HTTP/1.0" 404 169 "-" "ApacheBench/2.3" "-"/code/index.html
