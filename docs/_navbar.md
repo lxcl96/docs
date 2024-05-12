@@ -1,14 +1,5 @@
-* [首页](/ "回到首页")
-* 入门
-
-  * [快速开始](zh-cn/quickstart.md)
-  * [多页文档](zh-cn/more-pages.md)
-  * [定制导航栏](zh-cn/custom-navbar.md)
-  * [封面](zh-cn/cover.md)
-  * [:us:, :uk:](/)
-  * [:cn:](/zh-cn/)
-
-
+* [主页](/ "回到主页")
+* [文档](/README.md "回到文档")
 * 配置
   * [配置项](zh-cn/configuration.md)
   * [主题](zh-cn/themes.md)

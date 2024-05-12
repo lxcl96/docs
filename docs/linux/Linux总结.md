@@ -69,7 +69,7 @@ root     tty2         2024-01-15 15:54
   ${var:1:4} #从左往右下标为1长度为4的子串，输出home
   ```
 
-+ 字符串操作2<img src='./img/v2-524131240ea5a43568f62fca77d69c3d_720w.webp'>
++ 字符串操作2![图片描述](./_media/v2-524131240ea5a43568f62fca77d69c3d_720w.webp)
 
   ```bash
   # 例子
@@ -86,7 +86,7 @@ root     tty2         2024-01-15 15:54
   ${var//e/+} == t+stcas+ # 表示把所有旧字符替换为新字符
   ```
 
-+ 字符串操作3<img src='./img/v2-b269d9125cdd219f343a4050af94d12c_720w.webp'>
++ 字符串操作3![图片描述](./_media/v2-b269d9125cdd219f343a4050af94d12c_720w.webp)
 
 
 
@@ -214,7 +214,7 @@ export -p #效果和export 一样输出当前系统环境变量
 
 [参考流程图如下(不完整正确):](shell环境变量加载流程.drawio) 
 
-<img src='img/笔记/shell环境变量加载流程.png' />
+![图片描述](./_media/shell环境变量加载流程.png)
 
 > + **交互式shell**: 等待用户输入,并执行相应操作的shell
 > + **非交互式shell**: 读取存放文件中的内容,并根据内容执行相应操作
@@ -421,7 +421,7 @@ ly      ALL=(ALL)       ALL # 紧跟root
 
 [Linux 命令大全 | 菜鸟教程 (runoob.com)](https://www.runoob.com/linux/linux-command-manual.html)
 
-<img src='img/笔记/linux常用命令大全.png' />
+![图片描述](./_media/linux常用命令大全.png)
 
 # 12.shell参数
 

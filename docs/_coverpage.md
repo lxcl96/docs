@@ -1,12 +1,13 @@
-![logo](_media/icon.svg)
+![logo](logo.png)
 
-# docsify <small>3.5</small>
+# docs <small>&nbsp;lxcl96</small>
 
-> 一个神奇的文档网站生成器。
+- 用于展示学习文档及博客
 
-- 简单、轻便 (压缩后 ~21kB)
-- 无需生成 html 文件
-- 众多主题
+> 基于<a href="https://docsify.js.org/" target="_blank">docsify</a>的markdown文件阅读器。
 
-[GitHub](https://github.com/docsifyjs/docsify/)
-[Get Started](#docsify)
+
+[GitHub](https://github.com/lxcl96/docs "项目地址")
+[Get Started](README "快速开始")
+
+
