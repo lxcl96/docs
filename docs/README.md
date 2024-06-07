@@ -1,5 +1,8 @@
 # 1. 学习笔记
 
++ **ansible**
+  + [ansible笔记](ansible/ansible笔记.md "ansible笔记")
+  + [ansible总结](ansible/ansible总结.md "ansible总结")
 + [Docker](docker/docker笔记.md "docker笔记")
 + **Linux**
   + [linux笔记](linux/linux笔记.md "linux笔记")
@@ -29,4 +32,5 @@
   + [获取mybatis实现的mapper动态代理$Proxy6](java/获取mybatis实现的mapper动态代理$Proxy6.md "获取mybatis实现的mapper动态代理$Proxy6")
 
 # 2. 博客
-
++ [IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法](blogs/IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法.md "IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法")
++ [利用JDK工具HSDB查看Running JVM中的class实例属性](blogs/利用JDK工具HSDB查看Running JVM中的class实例属性.md "利用JDK工具HSDB查看Running JVM中的class实例属性")
