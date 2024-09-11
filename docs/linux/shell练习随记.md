@@ -4,7 +4,7 @@
 
 [【运维知识高级篇】34道Shell编程练习题及答案（从基础到实战：基础+计算+判断+循环+控制与数组+实战进阶）（二）-阿里云开发者社区 (aliyun.com)](https://developer.aliyun.com/article/1303892)
 
-# 1. cat nginx.log|aws '{print $1}'|sort -rn|uniq -c
+# 1. cat nginx.log|awk '{print $1}'|sort -rn|uniq -c
 
 # 2. shell关联数组使用
 

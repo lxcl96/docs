@@ -2011,3 +2011,132 @@ include /etc/logrotate.d # 这是一个目录
 默认该命令没有安装,自己安装即可`yum -y install restore`
 
 具体看命令帮助
+
+# 37. LVM
+
+## 37.1 概念
+
+LVM是逻辑盘卷管理（Logical Volume Manager）的简称，它是Linux环境下对磁盘分区进行管理的一种机制，LVM是建立在硬盘和分区之上的一个逻辑层，来提高磁盘分区管理的灵活性。
+
+LVM的工作原理其实很简单，它就是通过将底层的物理硬盘抽象的封装起来，然后以逻辑卷的方式呈现给上层应用。在传统的磁盘管理机制中，我们的上层应用是直接访问文件系统，从而对底层的物理硬盘进行读取，而在LVM中，其通过对底层的硬盘进行封装，当我们对底层的物理硬盘进行操作时，其不再是针对于分区进行操作，而是通过一个叫做逻辑卷的东西来对其进行底层的磁盘管理操作。比如说我增加一个物理硬盘，这个时候上层的服务是感觉不到的，因为呈现给上层服务的是以逻辑卷的方式。
+
+LVM最大的特点就是可以对磁盘进行动态管理。因为逻辑卷的大小是可以动态调整的，而且不会丢失现有的数据。如果我们新增加了硬盘，其也不会改变现有上层的逻辑卷。作为一个动态磁盘管理机制，逻辑卷技术大大提高了磁盘管理的灵活性。
+
+## 37.2 术语
+
++ **PV(Physical Volume)** 物理卷
+
+  物理卷在逻辑卷管理中处于最底层, 它可以是实际物理硬盘上的分区, 也可以是整个物理硬盘.
+
++ **VG(Volume Group)** 卷组
+
+  卷组建立在物理卷上, **一个卷组中至少要包含一个物理卷**, 在卷组建立之后可动态添加物理卷到卷组中.**一个逻辑卷管理系统工程中可以只有一个卷组,也可以拥有多个卷组**.
+
++ **LV(Logical Volume)** 逻辑卷
+
+  逻辑卷建立在卷组之上,卷组中未分配空间可以用于建立新的逻辑卷. 逻辑卷建立后可以动态的扩展和缩小空间(前提卷组和底层分区支持).系统中多个逻辑卷可以属于同一个卷组,也可以属于不同的多个卷组.
+
++ **PE(Physical Extent)**  LVM的最小寻址单元
+
+  每一个物理卷的划分被称为PE(Physical Extents)的基本单元, **具有唯一编号的PE是可以被LVM寻址的最小单元.**PE的大小可以配置,默认是4MB.
+
++ **LE(Logical Extent)** LVM可被寻址的基本单元
+
+  逻辑卷也被划分为LE(Logical Extents)的可被寻址的基本单位. **在同一个卷组中,LE的大小和PE是相同的,并且一一对应**.
+
+其PV,VG,LV三者关系如图:
+
+![LVM模型](./_media/LVM模型.jpg)
+
+## 37.3 操作
+
+1. **磁盘分区**
+
+   ```bash
+   $sudo fdisk /dev/sda
+   # 进入交互界面
+   n #创建分区
+   回车#默认主分区
+   回车#默认分区号 假定为5 sda5
+   回车#分区大小
+   p #打印分区表
+   w#保存退出
+   ```
+
+2. **格式分区**
+
+   ```bash
+   $sudo mkfs.vfat /dev/sda5 #格式化为FAT32类型 
+   $sudo lsblk -f #查看分区文件类型
+   ```
+
+   > 查询支持的文件系统类型  `sudo find / -name mkfs*|grep bin`
+
+3. **物理卷转为LVM物理卷**
+
+   ```bash
+   $sudo pvcreate /dev/sda5
+   $sudo pvdisplay #列出所有lvm物理卷
+   ```
+
+4. **创建卷组**
+
+   ```bash
+   #在分区sda5上创建名为ubuntu_vg的vg卷组
+   $sudo vgcreate ubuntu_vg /dev/sda5
+   $sudo vgdisplay #列出所有卷组
+   ```
+
+5. **创建逻辑卷**
+
+   ```bash
+   #在vg卷组ubuntu_vg上创建名为lv_swap的逻辑卷,大小为10G
+   $sudo lvcreate -n lv_swap -L 10G ubuntu_vg
+   $sudo lvdisplay # 列出所有逻辑卷和快照
+   ```
+
+6. **挂载逻辑卷**
+
+   ```bash
+   $sudo mount /dev/ubuntu/lv_swap
+   ```
+
+7. **扩展逻辑卷** 
+
+   ```bash
+   $sudo fdisk /dev/sda #创建分区如sda6 
+   $sudo pvcreate /dev/sda6 #转为LVM物理卷
+   $sudo vgextend ubuntu_vg /dev/sda6 #将sda6卷附加在vg卷组ubuntu_vg
+   ```
+
+8. **调整逻辑卷大小**
+
+   待更新
+
+9. **删除逻辑卷**
+
+   ```bash
+   $sudo lvremove /dev/ubuntu_vg/lv_swap
+   ```
+
+10. **卷组中移除第二个分区**
+
+    ```bash
+    $sudo pvmove /dev/sda6 #将卷组中要移除的分区数据转移到 同卷组中其他lvm物理卷
+    $sudo vgreduce ubuntu_vg /dev/sda6 #将sda6从卷组ubuntu_vg中移除
+    $sudo pvremove /dev/sda6#从LVM中删除物理卷标记
+    
+    #查看是否完全删除
+    $sudo pvdisplay #
+    $sudo vgdisplay
+    ```
+
+    > 如果存在`[unknown]` 的物理卷执行命令`sudo vgreduce --removemissing ubuntu_vg` 移除卷组ubuntu_vg中所有丢失的物理卷。
+
+11. **恢复原分区, 重新分区格式化**
+
+    ```bash
+    $sudo mkfs.vfat /dev/sda5 #格式化为FAT32类型 
+    ```
+
+    

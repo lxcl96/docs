@@ -8,6 +8,7 @@
   + [linux笔记](linux/linux笔记.md "linux笔记")
   + [linux总结](linux/linux总结.md "linux总结")
   + [shell练习随记](linux/shell练习随记.md "shell练习随记")
+  + [ubuntu总结](linux/ubuntu总结.md "ubuntu总结")
 + **Mysql**
   + [mysql待处理](mysql/mysql待处理.md "mysql待处理")
   + [mysql进阶](mysql/mysql进阶.md "mysql进阶")
