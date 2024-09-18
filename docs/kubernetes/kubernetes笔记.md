@@ -4,11 +4,9 @@ https://kubernetes.io/zh-cn/docs/concepts/overview/components/
 
 https://www.kubernetes.org.cn/k8s
 
-# 1. 核心概念
+# 1. 认识kubernetes
 
-## 1.1 认识kubernetes
-
-### 1.1.1 什么是kubernetes
+## 1.1 什么是kubernetes
 
 Kubernetes 是一个可移植、可扩展的开源平台，用于管理容器化的工作负载和服务，可促进声明式配置和自动化。 Kubernetes 拥有一个庞大且快速增长的生态，其服务、支持和工具的使用范围相当广泛。
 
@@ -18,9 +16,9 @@ Borg架构图如下：
 
 ![image-20240914163433498](./_media/image-20240914163433498.png)
 
-### 1.1.2 为什么需要kubernetes
+## 1.2 为什么需要kubernetes
 
-#### 1.1.2.1 Kubernetes 的历史背景
+### 1.2.1 Kubernetes 的历史背景
 
 ![Container_Evolution](./_media/Container_Evolution.svg)
 
@@ -54,7 +52,7 @@ Borg架构图如下：
 - 资源隔离：可预测的应用程序性能。
 - 资源利用：高效率和高密度。
 
-#### 1.1.2.2 Kubernetes能做什么?
+### 1.2.2 Kubernetes能做什么?
 
 容器是打包和运行应用程序的好方式。在生产环境中， 你需要管理运行着应用程序的容器，并确保服务不会下线。 例如，如果一个容器发生故障，则你需要启动另一个容器。 如果此行为交由给系统处理，是不是会更容易一些？
 
@@ -91,47 +89,47 @@ Kubernetes 为你提供：
 - **IPv4/IPv6 双栈** 为 Pod（容器组）和 Service（服务）分配 IPv4 和 IPv6 地址。
 - **为可扩展性设计** 在不改变上游源代码的情况下为你的 Kubernetes 集群添加功能。
 
-### 1.1.3 企业容器调度平台对比
+## 1.3 企业容器调度平台对比
 
-#### 1.1.3.1 Apache Mesos
+### 1.3.1 Apache Mesos
 
-##### 1.1.3.1.1 基本概念
+#### 1.3.1.1 基本概念
 
 Mesos是一个**分布式调度系统**内核，早于Docker的产生，Mesos作为资源管理器， 从DC/OS(数据中心操作系统)的角度提供资源视图。**主/从结构**的工作模式，**主节点分配任务**，并用**从节点上的Executor负责执行**，通过Zookeeper给主节点提供注册服务、服务发现等功能。通过Framework Marathon 提供容器调度的能力。
 
-##### 1.1.3.1.2 优势
+#### 1.3.1.2 优势
 
 经过时间的检验，作为资源管理器的Apache Mesos在容器之前就已经出现很久了，支持运行容器化和非容器化的工作负载。可以支持应用程序的健康检查，开放的架构。支持多个框架和多个调度器，通过不同的Framework可以运行Hadoop/Spark/MPI等多种不同的任务。
 
 支持超大规模的节点管理，模拟测试支持超过5w+节点，在大规模上拥有较大优势。
 
-#### 1.1.3.2 Docker Swarm
+### 1.3.2 Docker Swarm
 
-##### 1.1.3.2.1 基本概念
+#### 1.3.2.1 基本概念
 
 Docker Swarm是一个由Docker开发的调度框架。由Docker自身开发的好处之一就是标准Docker API的使用，Swarm由多个代理（Agent）组成，把这些代理称之为节点（Node）。这些节点就是主机，这些主机在启动Docker Daemon的时候就会打开相应的端口，以此支持Docker远程API。这些机器会根据Swarm调度器分配给他们的任务，拉取和运行不同的镜像。
 
-##### 1.1.3.2.2 优势
+#### 1.3.2.2 优势
 
 从Docker1.12版本开始，Swarm随Docker一起默认安装发布。由于随Docker引擎一起发布，无需额外安装，配置简单。支持服务注册、服务发现，内置Overlay Network以及Load Balancer。与Docker CLI非常类似的操作命令，对熟悉Docker的人非常容易上手学习。
 
 入门门槛低，学习成本低，使用更便捷，适合中小型系统。
 
-#### 1.1.3.3 Google Kubernetes
+### 1.3.3 Google Kubernetes
 
-##### 1.1.3.3.1 基本概念
+#### 1.3.3.1 基本概念
 
 Kubernetes 是基于Google在过去十五年来大量生产环境中运行工作负载的经验。Kubernetes的实现参考了Google内部的资源调度框架Borg，但并不是Borg的内部容器编排系统的开源，而是借鉴Google从运行Borg获得的经验教训，形成了Kubernetes项目。
 
 它使用Label和Pod的概念来将容器划分为逻辑单元。Pods是同地协作(co-located)容器的集合，这些容器被共同部署和调度，形成了一个服务，这是Kubernetes和其他两个框架的主要区别。相比于基于相似度的容器调度方式（就像Swarm和Mesos），这个方法简化了对集群的管理。
 
-##### 1.1.3.3.2 优势
+#### 1.3.3.2 优势
 
 最流行的容器编排解决方案，基于Google庞大的生态圈及社区产生的产品。通过Pods这一抽象的概念，解决Container之间的依赖于通信的问题。Pods、Services、Deployments是独立部署的部分。可以通过Selector提供更多的灵活性。内置服务注册表和负载均衡。
 
 适用度更广，功能更强大，相较于Mesos来说节点规模较小。
 
-## 1.2 ==Kubernetes组件==
+# 2. ==Kubernetes组件==
 
 一个正常运行的 Kubernetes 集群所需的各种组件
 
@@ -139,13 +137,13 @@ Kubernetes 是基于Google在过去十五年来大量生产环境中运行工作
 
 ![architecture](./_media/architecture.png)
 
-### 1.2.1 ==核心组件==
+## 2.1 ==核心组件==
 
 Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的工作机器**组成，这些**工作机器称作节点（Node）**。 每个集群至少需要一个工作节点来运行 Pod。
 
 工作节点托管着组成应用负载的 Pod(*Pod 表示你的集群上一组正在运行的容器。*)。控制平面管理集群中的工作节点和 Pod。 在生产环境中，控制平面通常跨多台计算机运行，而一个集群通常运行多个节点，以提供容错和高可用。
 
-#### 1.2.1.1 五大控制面板组件（Control Panel Components）
+### 2.1.1 五大控制面板组件（Control Panel Components）
 
 控制平面组件会为集群做出全局决策，比如资源的调度。 以及检测和响应集群事件，例如当不满足 Deployment 的 `replicas` 字段时，要启动新的 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/)）。
 
@@ -202,7 +200,7 @@ Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的�
 
 ![image-20240914204919708](./_media/image-20240914204919708.png)
 
-#### 1.2.1.2 三大节点组件（Node Components）
+### 2.1.2 三大节点组件（Node Components）
 
 在每个节点上运行，维护运行的 Pod 并提供 Kubernetes 运行时环境：
 
@@ -236,7 +234,7 @@ Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的�
 
 ![image-20240914204954943](./_media/image-20240914204954943.png)
 
-#### 1.2.1.3 附加组件/插件 （Addons）
+### 2.1.3 附加组件/插件 （Addons）
 
 插件扩展了 Kubernetes 的功能。一些重要的例子包括：
 
@@ -270,7 +268,7 @@ Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的�
   > + `Federation` 提供跨可用区的集群
   > + `Fluentd-elasticsearch` 提供集群日志采集、存储与查询
 
-### 1.2.2 分层架构
+## 2.2 分层架构
 
 从顶层到底层的顺序：
 
@@ -299,12 +297,294 @@ Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的�
 
 ![14937095836427](./_media/14937095836427.jpg)
 
+# 3. 资源和对象
 
+Kubernetes中所有内容都被抽象为"资源"，如:Pod,Service,Node等都是资源。 "对象"就是"资源"的实例，是持久化的实体。如某个具体的Pod、某个具体的Node。Kubernetes使用这些实体去表示整个集群的状态。
 
+对象的创建、删除、修改都是通过`Kubernetes API`，也就是`API Server`组件提供的API接口，这些都是Restful风格的API，与Kubernetes的**万物皆资源对象**理念相符。命令行工具`kubectl`，实际上也是调用Kubernetes API。
 
+kubernetes中资源类别有很多种，`kubectl`可以通过配置文件来创建这些对象，配置文件更像是描述对象属性的文件。配置文件格式一般为yaml或json
 
+> 与Linux一切皆文件相似的理念, 在**kubernetes中一切皆资源**.
+>
+> 资源和对象的关系类似于Java中**类和实例的关系**.
 
+# 4. 服务的分类
 
-# 2. 
+根据服务是否需要**将数据持久化**可以将服务分为:
 
-# 3. 
++ 无状态服务
++ 有状态服务
+
+#### 3.1.1.1 无状态服务
+
+不会对本地环境产生任何依赖,如:不会存储数据到本地磁盘
+
+**代表应用**: nginx,Apache
+
+**优点**: 对客户端透明,无依赖关系,可以高效实现扩容,迁移
+
+**缺点**: 不能存储数据,需要额外的数据服务支撑
+
+#### 3.1.1.2 有状态服务
+
+会对本地环境产生依赖,如:会将数据存储到本地磁盘
+
+**代表应用**: redis,mysql
+
+**优点**: 可以独立存储数据,实现数据管理
+
+**缺点**: 集群环境下需要实现主从,数据同步,备份,水平扩容复杂
+
+# 5 ==kubernetes资源变量分类==
+
+参考地址：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/
+
+![image-20240918143759127](./_media/image-20240918143759127.png)
+
+## 5.1 元数据级
+
++ `Horizontal Pod Autoscaler`即`HPA` **Pod自动扩容**
+
+  Pod自动扩容：可以根据cpu使用率或自定义指标(metrics)自动对Pod进行扩容或缩容。
+
+  + 控制器管理器每隔30s（可以通过`horizontal-pod-autoscaler-sync-period`修改）查询metrics的资源使用情况
+  + 支持三种metrics类型
+    + **预定义metrics**（比如Pod的CPU）以**利用率**的方式计算
+    + **自定义的Pod metrics**，以**原始值**(raw value)的方式计算
+    + **自定义的object metrics**
+  + 支持两种metrics查询方式：`Heapster`和自定义的RESTful API
+  + 支持多metrics
+
++ `PodTemplate`
+
+  Pod Template是关于Pod的定义，但是被包含在其他的Kubernetes对象中（如Deployment、Statement、DaemonSet等控制器）。控制器通过Pod Template信息来创建Pod。
+
+  `HPA`**进行自动化Pod扩/缩容就是根据此模板**
+
++ `LimitRange`
+
+  可以对集群内`Request`和`Limits`的配置项做一个全局的统一的限制，相当于批量设置了某一个范围内（某个命名空间namespace）的Pod的资源使用限制。
+
+## 5.2 集群级
+
++ `Namespace`
+
+  逻辑隔离，用于将资源划分为不同的组。集群中的`namespace`可以有多个
+
++ `Node`  物理机
+
+  不像其他的资源（如Pod和Namespace），Node的本质上不是Kubernetes来创建的，Kubernetes只是管理Node上的资源。虽然可以通过Manifest创建一个Node对象，但kubernetes也只是去检查是否真的有这一个Node机器。如果没有，检查就会失败，也不会在其上调度Pod。
+
++ `ClusterRole`
+
+  集群角色，用于管理集群权限
+
++ `ClusterRoleBinding`
+
+  将`ClusterRole`或`Role`与资源进行绑定（可以绑定到集群级别上）
+
+## 5.3 命名空间级
+
+### 5.3.1 工作负载资源
+
+#### 5.3.1.1 `Pod` 容器组
+
+`Pod`（容器组）是kubernetes中最小的可部署单元。一个Pod容器组包含了至少一个应用程序容器、存储资源、一个唯一的网络IP地址、以及一些确定容器该如何运行的选项。Pod容器组代表了kubernetes中一个独立的应用程序运行实例，该实例可能由单个容器或多个紧耦合在一起的容器组成。
+
+Docker是kubernetes Pod中使用最广泛的容器引擎，当然kubernetes中也支持其他容器引擎。如containerd，CRI-O
+
+Kubernetes集群中Pod存在如下两种使用途径：
+
++ 一个Pod中只运行一个容器，"one-container-per-pod"是kubernetes中最常见的使用方式。此时你可以认为Pod容器组是该容器的wrapper，kubernetes通过Pod管理容器，而不是直接管理容器。
++ 一个Pod中运行多个需要相互协作的容器。你可以将多个紧耦合、共享资源且始终在一起运行的容器编排在同一个Pod中。
+
+![image-20240918154218068](./_media/image-20240918154218068.png)
+
+#### 5.3.1.2 `replicas` Pod副本
+
+`replicas`Pod副本，即根据`PodTemplate`模板复制出来的。这些副本除了一些描述性信息（Pod的名字，uid等）不一样外，其他信息都是一样的：如Pod内部的容器、容器的数量、容器里面运行的应用等。
+
+`Pod`的**控制器**通常包含一个名为`replicas`的属性。该属性则指定了特定Pod的副本数量，当当前集群中该Pod的数量与该属性指定的值不一致时，kubernetes会采取一定的策略去使得当前状态满足配置的要求。
+
+#### 5.3.1.3 Pod控制器
+
+Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还是Pod，只是多了一些描述该对象的参数。类似与Pod的wrapper。Pod控制器可分为以下几类：
+
++ 适用无状态服务Pod控制器
++ 适用有状态服务Pod控制器
++ 守护进程Pod控制器
++ 任务/定时任务Pod控制器
+
+##### 5.3.1.3.1 适用无状态服务Pod控制器
+
++ `ReplicationController`即`RC`  **只支持扩容和缩容**
+
+  **只支持等式的selector**
+
+  是kubernetes系统中核心概念之一。简单来说`RC`可以保证任意时间运行Pod的副本数量，能够保证Pod总是可用的。如果实际Pod数量比指定的多那么就会结束掉多余的Pod，如果Pod失败、被删除或挂掉后导致Pod实际数量比指定的少它就会自动启动新的Pod。所以即使只有一个Pod，我们也要使用`RC`管理我们的Pod，提供系统可用性。**已废弃**
+
++ `ReplicaSet`即`RS ` **只支持扩容和缩容**
+
+  **支持集合式的selector**
+
+  主要作用就是用来确保容器应用的副本数始终保持在用户预定义的数量。即如果有容器退出，会自动创建新的Pod代替；如果异常多出来的容器也会被自动回收。
+
+  > **建议使用**`ReplicaSet`**代替**`ReplicationController`**，`RS`是`RC`的改良版，支持更复杂的标签选择器。**
+
++ ==`Deployment` **实际中主要用的Pod控制器**==
+
+  该控制器是基于`RS`的进一步封装，提供了更加丰富的部署相关功能。主要有以下作用：
+
+  + **自动创建RS和Pod**
+
+  + **滚动升级，滚动回滚**
+
+    不会停止服务更新，即热更新。例如`PodTemplate`更新了，会自动创建新的`RS`比如`RS-2`，然后逐步创建里面的Pod。当新的Pod创好且里面容器服务可用后，停掉原来`RS-1`中的Pod。然后逐步替代其他Pod，直至完全更新，将原来的`RS-1`保存以便于回滚。
+
+    ![image-20240918165037219](./_media/image-20240918165037219.png)
+
+  + **平滑扩容和缩容**
+
+    简单命令实现扩容和缩容，依赖`ReplicaSet`
+
+  + **暂停和恢复Deployment**
+
+    为了避免配置未修改完频繁的自动升级、降级，因为有时配置更改不是以下就改完的。
+
+##### 5.3.1.3.2 适用有状态服务Pod控制器 `StatefulSet`
+
+`StatefulSet`中每个Pod的DNS格式为`statefulSetName-{0...N-1}.serviceName.namespace.svc.cluster.local`，则可以通过该域名实现Pod的互相通信。
+
++ `statefulSetName`为`StatefulSet`的名字
++ `0...N-1`为Pod所在的序号，从0到N-1
++ `serviceName`为`Headless Service`的名字
++ `namespace`为服务所在的命名空间名，`Headless Service`和`StatefulSet`必须在同一命名空间`namespace`
++ `svc` 固定值
++ `.cluster.local`为cluster domain集群域名
+
+***主要特点：***
+
++ 稳定的持久化存储，基于volumeclaimTemplate
++ 稳定的网络标志，基于Headless Service
++ 有序部署，有序扩展  **按照Pod的0...N-1的顺序进行**，在下一个Pod运行前，它之前所有的Pod必须是Running或Ready状态，基于init containers来实现。
++ 有序收缩，有序删除  **按照Pod的N-1...0的顺序进行**，在下一个Pod运行前，它之前所有的Pod必须是shu或Ready状态，基于init containers来实现。
+
+***组成：***
+
++ `Headless Service `  用于定义网络标志（DNS domain）即DNS服务
++ `VolumeClaimTemplate`   PVC，用于持久化数据存储的声明模板
+
+***注意事项：***
+
++ kubernetes v1.5版本以上才支持
++ 所有Pod的Volume必须使用PersistentVolume或是管理员事先创建好
++ 为了保证数据安全，删除StatefulSet时不会删除Volume
++ StatefulSet需要一个Headless Service来定义DNS domain，需要在StatefulSet之前创建
+
+![image-20240918172706088](./_media/image-20240918172706088.png)
+
+##### 5.3.1.3.3 守护进程Pod控制器 `DaemonSet`
+
+**DaemonSet 的行为是在每个 Node 节点 上运行 一个 Pod 副本实例。DaemonSet 确保在每个节点上都有一个 Pod 运行，而不是为每个应用程序的 Pod 都附加一个守护进程。**常用来部署一些集群的日志、监控或者其他系统管理应用。典型的应用包括：
+
++ 日志收集，比如fluentd，logstash等
++ 系统监控，比如Prometheus Node Exporter，collectd，New Relic agent，Ganglia gmod等
++ 系统程序，比如kube-proxy，kube-dns，glusterd，ceph等
+
+![image-20240918195027552](./_media/image-20240918195027552.png)
+
+##### 5.3.1.3.4 任务/定时任务Pod控制器
+
++ `Job` 一次性任务（一个任务一个Pod），运行完成后Pod销毁，不再重新启动容器。如：数据初始化、下载镜像
++ `CronJob` 定时任务
+
+### 5.3.2 服务与发现资源
+
+![image-20240918201436835](./_media/image-20240918201436835.png)
+
++ `Service`
+
+  `Service`简写`svc`。**Pod不能直接提供给外网访问**，而是应该使用`Service`。`Service`**就是把Pod暴露出来提供服务**，`Service`才是真正的服务。
+
+  可以说`Service`是一个应用服务的抽象，**定义了Pod逻辑集合和访问这个Pod集合的策略**。`Service`代理Pod集合，对外表现为一个访问入口，访问该入口的请求将经过负载均衡，转发到后端Pod中的容器。
+
+  + **主要用于内部服务器Pod间通信**
+  + **工作在TCP/IP四层网络层的，可以实现简单的外部访问**
+
++ `Ingress`
+
+  **Ingress** 是一种控制外部 HTTP(S) 流量如何到达集群内服务的资源。它工作在第 7 层（应用层），允许基于域名、URL 路径、HTTP headers 等路由请求，提供更高级的流量控制和负载均衡功能。
+
+  + **基于域名、URL 路径、TLS 提供 HTTP 流量控制**
+  + **提供第 7 层的负载均衡**
+
+![image-20240918201643373](./_media/image-20240918201643373.png)
+
+> 当需要精细化控制 HTTP/HTTPS 请求时，Ingress 是首选。而对于非 HTTP 流量（如数据库服务、gRPC 等），Service 是更合适的工具。
+
+### 5.3.3 存储资源	
+
++ `Volume`
+
+  数据卷，共享Pod中容器使用的数据。用来放持久化的数据，比如数据库数据。
+
+  + PersistentVolume即PV
+  + PersistentVolumeClaim即PVC
+
++ `CSI`
+
+  `CSI`即`Contaniner Storage Interface`是由来自kubernetes，Mesos，Docker等社区成员联合制定的一个行业标准接口规范，旨在将任意存储系统暴露给容器化应用程序。
+
+  CSI规范定义了存储提供商实现CSI兼容的Volume Plugin的最小操作集和部署建议。CSI的主要焦点是声明Volume Plugin必须实现的接口。
+
+### 5.3.4 特殊类型配置资源
+
++ `ConfigMap`
+
+  ConfigMap 包含供 Pod 使用的配置数据。存放k-v键值对（如应用的端口，数据存放路径），更新配置数ConfigMap时会自动更新容器。
+
++ `Secret`
+
+  和`ConfigMap`功能完全一样，但是提供了数据加密的功能。有下面三种类型：
+
+  + `Service Account`：用来访问kubernetes API，由kubernetes自动创建，并且会自动挂载到Pod的`/run/secrets/kubernetes.io/serviceaccount`目录中
+  + `Opaque`：base64编码格式的Secret，用来存储密码，密钥等（默认方式）
+  + `kubernetes.io/dockerconfigjson`：用来存储私有docker registry的认证信息
+
++ `DownwardAPI`
+
+  downwardAPI这个模式和其他模式不一样的地方在于它不是为了存放容器的数据，也不是用来进行容器和宿主机的数据交换的，而是让**Pod里的容器能够直接获取这个Pod对象本身的一些信息**。
+
+  downwardAPI提供两种方式用于将Pod的信息注入到容器内：
+
+  + **环境变量**：用于单个变量，可以将Pod信息和容器信息直接注入容器内部
+  + **volume挂载**：将Pod信息生成为文件，直接挂载到容器内部中
+
+### 5.3.5 其他
+
++ `Role`
+
+  定义一组权限，命名空间级别
+
++ `RoleBinding`
+
+  将`Role`或`ClusterRole`与资源进行绑定（只能绑定到命名空间级别）
+
+# 6. 资源清单(资源配置文件)
+
+**其实就是资源变量**  https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/
+
+Kubernetes (K8s) 中的资源（Resource）可以分为多种类型，涵盖从核心的计算资源（如 Pod 和 Node）到更高层的网络、存储和安全管理工具。这些资源通常定义在 YAML 或 JSON 文件中，称为 **资源清单（Resource Manifest）**，并用于管理 Kubernetes 集群中的对象。
+
+# 7. 对象规约和状态
+
++ ***规约(Spec)***
+
+  `spec`是规约、规格的意思。`spec`**是必须的，手动维护yaml**，他描述了对象的期望状态(Desired State)--希望对象所具有的特征。当创建kubernetes对象时，必须提供对象的规约，用于描述该对象的期望状态，以及关于对象的一些基本信息（例如名称）。
+
++ ***状态(Status)***
+
+  `status`表示对象的实际状态，该属性由kubernetes自己维护，**kubernetes**会**通过一系列的控制器**对对应对象进行管理，**让对象实际状态status尽可能符合期望状态spec**
+
+> `spec`规约是自己维护的，期望，`status`是k8s根据实际信息采集的，实际。k8s会自动调整让实际`status`接近`spec`。
