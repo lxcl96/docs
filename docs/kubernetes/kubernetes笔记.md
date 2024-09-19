@@ -588,3 +588,237 @@ Kubernetes (K8s) 中的资源（Resource）可以分为多种类型，涵盖从�
   `status`表示对象的实际状态，该属性由kubernetes自己维护，**kubernetes**会**通过一系列的控制器**对对应对象进行管理，**让对象实际状态status尽可能符合期望状态spec**
 
 > `spec`规约是自己维护的，期望，`status`是k8s根据实际信息采集的，实际。k8s会自动调整让实际`status`接近`spec`。
+
+# 8. kubernetes集群搭建
+
+https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
+
+有下面四种搭建方式:
+
++ `minikube`   建议个人电脑搭建,轻量化
+
++ `kubeadm`  完全的看k8s
+
++ 二进制安装
+
+  通过下载并手动安装 Kubernetes 的各个组件（如 kube-apiserver、kube-controller-manager、kubelet、kube-proxy 等）来构建 Kubernetes 集群。用户需要自己配置所有组件的连接和管理。
+
++ 命令行安装
+
+## 8.1 `minikube`搭建k8s
+
+
+
+## 8.2 `kubeadm`搭建k8s
+
+### 8.2.1 服务器要求
+
++ 最少三台机器,一个Master,两个Node
++ 每台机器最低配置2核,2G内存,20GB硬盘
++ 最好能联网,或者有对应的镜像私有仓库
+
+### 8.2.2 软件环境
+
++ 操作系统: centos7
++ Docker 20.10 (k8s 1.23.17只兼容到docker20.10)
++ k8s 1.23.17 (**1.24**版本后不支持docker)
+
+### 8.2.3 安装步骤
+
+1. 初始化操作(所有节点)
+
+   ```bash
+   # 关闭防火墙
+   $sudo systemctl stop firewalld
+   $sudo systemctl disable firewalld
+   #关闭selinux
+   $sudo sed -i 's/SELINUX\=enforcing/SELINUX\=disabled' /etc/selinux/config # 永久关闭
+   $sudo setenforce 0#临时
+   #关闭swap k8s不推荐使用swap
+   $sudo swapoff -a #临时
+   #注释包含swap的行 其中 -r表示正则 &表示匹配到的行 
+   $sudo sed -ri 's/.*swap.*/#&/' /etc/fstab #永久 (ri顺序不能颠倒)
+   #关闭完swap一定要重启机器
+   
+   #根据规划规则设置主机名
+   $sudo cat >> /etc/hosts<< EOF
+   192.168.136.151 k8s-master
+   192.168.136.152 k8s-node1
+   192.168.136.153 k8s-node2
+   EOF
+   
+   #将桥接的IPV4流量传递到iptables的链
+   $sudo tee /etc/sysctl.d/k8s.conf << EOF #tee读取标准输入流数据到文件中
+   net.bridge.bridge-nf-call-ip6tables = 1
+   net.bridge.bridge-nf-call-iptables = 1
+   EOF
+   $sudo sysctl --system #生效
+   
+   # 设置阿里云yum镜像源
+   $sudo cp CentOS-Base.repo CentOS-Base.repo.bak
+   $sudo curl -o CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo
+   $sudo yum makecache
+   #时间同步
+   $sudo yum install ntpdate -y
+   $sudo ntpdate time.windows.com
+   $sudo systemctl enable ntpdate
+   ```
+
+2. 安装基础软件(所有节点)
+
+   + 安装Docker
+
+     参考文档: https://developer.aliyun.com/mirror/docker-ce?spm=a2c6h.13651102.0.0.57e31b11Oq0dHq
+
+     ```bash
+     #卸载旧版本
+     $sudo yum remove docker \
+                       docker-client \
+                       docker-client-latest \
+                       docker-common \
+                       docker-latest \
+                       docker-latest-logrotate \
+                       docker-logrotate \
+                       docker-engine
+     # 设置yum仓库  docker换成阿里云仓库会更快
+     $sudo yum install -y yum-utils
+     ## Step 2: 添加软件源信息 这里是 docker-ce二进制包的位置,不是镜像的地址
+     $sudo yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+     # 列出可用docker旧版本
+     $sudo yum list docker-ce.x86_64 --showduplicates | sort -r 
+     #docker-ce.x86_64            3:20.10.24-3.el7                    docker-ce-stable
+     #docker-ce.x86_64            3:26.1.4-1.el7                      docker-ce-stable
+     # 不确定版本号,可以一个一个试试实际是(20.10.24-3.el7)
+     # 安装docker engine 指定版本
+     $sudo yum remove -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin
+     $sudo yum install docker-ce-20.10.24-3.el7  \
+      docker-ce-cli-20.10.24-3.el7  \
+      containerd.io #配合k8s 其他插件可以不安装如docker-compose-plugin, docker-buildx-plugin安装失败,需要找到合适的版本(用于构建镜像)
+     $yum list installed|grep docker
+     $sudo systemctl start docker
+     $sudo systemctl enable docker
+     ```
+
+     > **docker-ce是docker引擎本身, docker-ce-cli是命令行工具执行docker ps等命令, containerd.iodocker运行的守护进程, docker-buildx-plugin为跨平台构建镜像, ocker-compose-plugin为简单的容器编排**
+
+   + 设置docker镜像地址
+
+     ```bash
+     $sudo tee /etc/docker/daemon.json <<EOF
+     {
+       "registry-mirrors": ["https://docker.registry.cyou","https://dockerpull.com","https://docker.rainbond.cc","https://docker.udayun.com"]
+     }
+     EOF
+     $sudo systemctl daemon-reload
+     $sudo systemctl restart docker
+     ```
+
+   + 设置kubernetes-yum镜像地址 (**旧版本安装方式**)
+
+     参考文档:https://developer.aliyun.com/mirror/kubernetes?spm=a2c6h.13651102.0.0.73281b11CoAoOZ
+
+     ```bash
+     $sudo tee /etc/yum.repos.d/kubernetes.repo <<EOF
+     [kubernetes]
+     name=Kubernetes
+     baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
+     enabled=1
+     gpgcheck=0
+     repo_gpgcheck=0
+     
+     gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+     EOF
+     $sudo yum clean all && sudo yum makecache
+     ```
+
+     > 这个是管**二进制文件kubelet,kubeadm,kubectl,kubernetes等这些rpm软件包的**
+
+   + 安装`kubeadm`,`kubelet`,`kubectl`
+
+     ```bash
+     $sudo yum install -y kubelet-1.23.17 kubeadm-1.23.17 kubectl-1.23.17
+     $yum list installed|grep kube
+     #$sudo systemctl start kubelet #这一步无法启动kubelet,必须在kubeadm init中才会生产配置文件启动kubelet
+     $sudo systemctl enable kubelet
+     ```
+
+3. 部署Kubernetes Master
+
+   参考地址: https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/
+
+   ```bash
+   #在master节点执行
+   #如果第一次初始化失败,重新初始化前执行
+   $sudo kubeadm reset
+   $sudo kubeadm init \ #用于搭建控制面板master节点
+    --apiserver-advertise-address=192.168.136.151 \ #指定apiserver地址
+    # dockerpull.com为第三方镜像源地址,dyrnq为docker hub用户下的镜像仓库
+    --image-repository dockerpull.com/dyrnq \ #指定5大组件kube-apiserver,etcd等镜像下载地址,阿里云的registry.aliyuncs.com/google_containers\废了
+    --kubernetes-version v1.23.17 \ #指定kubernetes版本
+    --service-cidr=10.96.0.0/12 \ #指定service资源网段地址(横向流程,内部服务通信即Pod间通信)
+    --pod-network-cidr=10.244.0.0/16 #指定Pod资源网段地址
+    # 安装成功提示 
+    # Your Kubernetes control-plane has initialized successfully!
+    
+   #安装成功后,复制如下配置并执行
+   $sudo mkdir -p $HOME/.kube
+   $sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+   $sudo chown $(id -u):$(id -g) $HOME/.kube/config
+   $sudo get nodes
+   ```
+
+   ![image-20240919214323513](./_media/image-20240919214323513.png)
+
+   ***kubelet启动错误原因:***
+
+   + `journalctl -xefu kubelet`查看日志 
+
+     ```bash
+     Sep 19 21:05:23 k8s-master kubelet[28522]: E0919 21:05:23.719569   28522 server.go:302] "Failed to run kubelet" err="failed to run Kubelet: misconfiguration: kubelet cgroup driver: \"systemd\
+     ```
+
+     **解决方法:**
+
+     ```bash
+     $sudo docker info | grep -i cgroup
+     #输出为cgroupfs 改为systemd
+     # Cgroup Driver: cgroupfs
+     # Cgroup Version: 1
+     
+     
+     $sudo vim /etc/docker/daemon.json
+     #增加以下配置
+     {
+       "registry-mirrors":[..],
+       "exec-opts": ["native.cgroupdriver=systemd"]#修改cgroupfs
+     }
+     $sudo systemctl restart docker
+     $sudo systemctl start kubelet
+     ```
+
+   + `journalctl -xefu kubelet`查看日志 
+
+     ```bash
+     Sep 19 21:17:59 k8s-node1 kubelet[21589]: E0919 21:17:59.436820   21589 server.go:205] "Failed to load kubelet config file" err="failed to load Kubelet config file /var/lib/kubelet/config.yam
+     ```
+
+     这是因为没有执行`kubeadm init`就启动`kubelet`服务,`kubelet`的配置文件还没生成.必须先执行`kubeadm init`
+
+   > + `kubeadm init`命令option参考地址 https://kubernetes.io/zh-cn/docs/reference/setup-tools/kubeadm/kubeadm-init/
+   > + `--image-repository`和上面设置的`/etc/yum.repo.d/kubernetes.repo`功能不一样,`kubernetes.repo`主要用于**rpm二进制软件包kubelet,kubectl,kubeadm,kubernetes**的安装. 而`--image-repository`中指定的地址是容器镜像地址,主要用于**控制面板master节点的5大组件(kube-apiserver,etcd等等)镜像安装**
+
+4. 部署Kubernetes Node
+
+   
+
+5. 部署CNI网络插件
+
+   
+
+6. 测试kubernetes集群
+
+## 8.3 二进制安装k8s
+
+
+
+## 8.4 命令行工具安装k8s

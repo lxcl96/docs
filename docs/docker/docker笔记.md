@@ -159,7 +159,32 @@ Linux下安装docker只需要安装`Docker Engine`,文档地址:[Install Docker 
 
 
 
-## 2.2 配置阿里云容器镜像加速
+## 2.2 docker软件分析
+
+### 1. **`docker-ce`** (Docker Community Edition)
+
+- 这是 Docker 引擎本身，是容器运行时的核心。它负责拉取、管理、运行容器镜像。
+- 安装 `docker-ce` 需要依赖 `containerd.io`，因为 `docker-ce` 使用 `containerd` 作为底层的容器管理引擎。
+
+### 2. **`docker-ce-cli`**
+
+- 这是 Docker 的命令行工具（CLI），用于与 Docker 引擎交互。你通过这个工具运行命令，如 `docker run`、`docker ps` 等。
+- Kubernetes 依赖 `docker-ce-cli` 来与 Docker 交互，因此必须安装这个组件。
+
+### 3. **`containerd.io`**
+
+- `containerd` 是 Docker 的容器运行时守护进程，用于管理容器生命周期。它是 Docker 引擎的核心部分之一，也是 Kubernetes 默认支持的容器运行时之一。
+- 即使你不直接使用 `containerd`，Docker 也会依赖它来管理容器，所以它是必要的。
+
+### 4. **`docker-buildx-plugin`** (可选)
+
+- 这是 Docker 的多架构构建插件，通常用于跨平台镜像构建。如果你只需要在 Kubernetes 上运行容器而不涉及构建镜像，这个插件不是必需的。
+
+### 5. **`docker-compose-plugin`** (可选)
+
+- `docker-compose` 允许使用 `docker-compose.yml` 文件来定义和运行多个容器。如果你不使用 Docker Compose 在 Kubernetes 上编排容器，这个插件也是可选的，Kubernetes 本身提供了原生的编排能力。
+
+## 2.3 配置阿里云容器镜像加速
 
 [容器镜像服务 (aliyun.com)](https://cr.console.aliyun.com/cn-shanghai/instances/mirrors)
 
