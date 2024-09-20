@@ -384,7 +384,7 @@ kubernetes中资源类别有很多种，`kubectl`可以通过配置文件来创�
 
   将`ClusterRole`或`Role`与资源进行绑定（可以绑定到集群级别上）
 
-## 5.3 命名空间级
+## 5.3 *==命名空间级==*
 
 ### 5.3.1 工作负载资源
 
@@ -713,6 +713,24 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
      $sudo systemctl restart docker
      ```
 
+   + 配置docker的`cgroupdriver=systemd`驱动(**所有节点**)
+
+     ```bash
+   $sudo docker info|grep group
+     # 如果输出 Cgroup Driver: cgroupfs
+     $sudo vim /etc/docker/daemon.json
+     #增加以下配置
+     {
+       "registry-mirrors":[..],
+       "exec-opts": ["native.cgroupdriver=systemd"]#修改cgroupfs
+     }
+     #保存后
+     $sudo systemctl daemon-reload
+     $sudo systemctl restart docker
+     #再次确认
+     $sudo docker info|grep group
+     ```
+
    + 设置kubernetes-yum镜像地址 (**旧版本安装方式**)
 
      参考文档:https://developer.aliyun.com/mirror/kubernetes?spm=a2c6h.13651102.0.0.73281b11CoAoOZ
@@ -741,6 +759,8 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
      #$sudo systemctl start kubelet #这一步无法启动kubelet,必须在kubeadm init中才会生产配置文件启动kubelet
      $sudo systemctl enable kubelet
      ```
+     
+     > `kubelet`安装后无法成功启动,这是因为没有配置文件.在后续执行`kubeam init/join`后会自动运行不用管(前提改好了`cgroup`)
 
 3. 部署Kubernetes Master
 
@@ -764,7 +784,7 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    $sudo mkdir -p $HOME/.kube
    $sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
    $sudo chown $(id -u):$(id -g) $HOME/.kube/config
-   $sudo get nodes
+   $sudo kubectl get nodes
    ```
 
    ![image-20240919214323513](./_media/image-20240919214323513.png)
@@ -807,18 +827,181 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    > + `kubeadm init`命令option参考地址 https://kubernetes.io/zh-cn/docs/reference/setup-tools/kubeadm/kubeadm-init/
    > + `--image-repository`和上面设置的`/etc/yum.repo.d/kubernetes.repo`功能不一样,`kubernetes.repo`主要用于**rpm二进制软件包kubelet,kubectl,kubeadm,kubernetes**的安装. 而`--image-repository`中指定的地址是容器镜像地址,主要用于**控制面板master节点的5大组件(kube-apiserver,etcd等等)镜像安装**
 
-4. 部署Kubernetes Node
+4. 部署Kubernetes Node,加入集群中(**在两个Node节点上执行**)
 
+   参考地址: https://kubernetes.io/zh-cn/docs/reference/setup-tools/kubeadm/kubeadm-join/
+
+   ```bash
+   # 1.获取集群token值(master节点运行)
+   $sudo kubeadm token list 
+   # 如果集群token值已经过期,重新生成token(master节点运行)
+   $sudo kubeadm token create
    
-
-5. 部署CNI网络插件
-
+   # 2.获取集群ca证书hash值(master节点运行)
+   $openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
    
+   # 如果第3步失败了,Node节点上可以运行
+   $sudo kubeadm reset
+   # 3.在node机器上执行下面语句,正式加入master集群(node1,2节点运行)
+   $sudo kubeadm join 192.168.136.151:6443 \ #master节点的apiserver地址别忘了
+    --token $(sudo kubeadm token list|awk 'NR==2{print $1}') \ # 步骤1的值,不推荐一步到位,自己复制最好
+    --discovery-token-ca-cert-hash sha256:xxxxxx #步骤2的值
+   
+   #master节点上验证
+   $kubectl get nodes
+   
+   # 成功加入master集群后,Node节点的kubelet服务也自动运行了
+   ```
 
-6. 测试kubernetes集群
+   ![image-20240920102816335](./_media/image-20240920102816335.png)
+
+   ![image-20240920102855479](./_media/image-20240920102855479.png)
+
+5. 部署CNI网络插件(**以calico为例,还有flannel**)
+
+   参考地址: https://www.zhaowenyu.com/kubernetes-doc/install/follow-me-install-kubernetes-cluster/06-6.calico.html
+
+   ```bash
+   $kubectl get nodes # 发现集群三个节点都是**NotReady**状态
+   $kubectl get pods -n kube-system #发现coredns为pending暂停状态(-n 指定命名空间)
+   NAME                                 READY   STATUS    RESTARTS      AGE
+   coredns-6c589f9dc8-67stg             0/1     Pending   0             13h # 暂停,ready状态为0
+   coredns-6c589f9dc8-fkjfc             0/1     Pending   0             13h
+   etcd-k8s-master                      1/1     Running   2 (12h ago)   13h
+   kube-apiserver-k8s-master            1/1     Running   2 (12h ago)   13h
+   ...
+   #PS:获取更多资源信息 使用kubectl api-resources获取资源及其缩写
+   # 1.(master节点)下载calico配置文件
+   $wget -o calico.yaml https://docs.projectcalico.org/manifests/calico.yaml
+   $curl -L -e ';auto' -o calico.yaml https://docs.projectcalico.org/manifests/calico.yaml  #没有的话自己创建(目录随意)
+   		# -L 跟随重定向
+   		# -e ';auto'跟踪重定向时传递Referer头信息
+   # 2.(master节点)修改calico配置文件,
+   # 修改cidr IP地址端和kubeadm init初始化时--pod-network-cidr地址段一致
+   找到 'CALICO_IPV4POOL_CIDR', 将value改为 10.244.0.0/16# 如果发现该段被注释不改也可以,apply应用时会自动使用pod的网络端;
+   - name: CALICO_IPV4POOL_CIDR
+     value: "10.244.0.0/16" #该值为master节点执行kubeadm init时的参数
+   #修改网卡名 (如果新版本找不到 IP_AUTODETECTION_METHOD 就不用管了)
+   - name: IP_AUTODETECTION_METHOD #找不到就不管了
+     value: "interface=eth.*"
+   # 3.修改calico中镜像地址 (master节点)
+   $grep image calico.yaml
+   	image: docker.io/calico/cni:v3.25.0 #将前面的docker.io去掉
+       imagePullPolicy: IfNotPresent
+       ...
+   $sed -i 's/image: docker.io\//image: /' calico.yaml #只替换每行第一个
+   $sed -i 's#image: docker.io/#image: #g' calico.yaml #全局替换 (#和/一样为分隔符,可以自己随意指定,只要没有歧义就行)
+   # 4.(所有节点Master+Node) 提前将所有的镜像拉取下来 
+   $sudo docker pull dockerpull.com/calico/cni:v3.25.0 # (Node节点必备)
+   $sudo docker pull calico/node:v3.25.0 #如果docker已配置镜像源,可以不指定仓库镜像地址 # (Node节点必备)
+   $sudo docker pull calico/kube-controllers:v3.25.0 # (Master节点必备)
+   # 5. (master节点) 应用配置文件到资源
+   $kubectl apply -f calico.yaml #如果没问题,很快结束
+   
+   # 6. (master节点)查看Pod资源状态 
+   $kubectl get pods -n kube-system #发现calico-node节点正在执行初始化操作...
+       NAME                                     READY   STATUS     RESTARTS      AGE
+       calico-kube-controllers-cd8566cf-d7twm   1/1     Running    0             82s
+       calico-node-d9vdx                        0/1     Init:0/3   0             82s #等待变为1/1 ready running状态
+       calico-node-dl2jm                        0/1     Init:0/3   0             82s
+       calico-node-swl7r                        1/1     Running    0             82s
+   	... 
+   # 7. 查看每个pod资源的信息进度
+   $kubectl describe pods calico-node-d9vdx -n kube-system
+   $kubectl describe pods calico-node-dl2jm -n kube-system
+   
+   # 8. 查看所有节点状态(发现都是ready)
+   $kubectl get no #no=nodes缩写
+   # 9. 如果pods始终无法运行起来,就可以将其删除重新应用apply
+   ```
+
+   > `kubectl apply`参考 https://kubernetes.io/zh-cn/docs/reference/kubectl/generated/kubectl_apply/
+
+6. 测试kubernetes集群(**master节点**)
+
+   ```bash
+   #全在master节点执行
+   # 1.创建无状态Pod控制器deployment 下载镜像nginx
+   $kubectl create deployment nginx --image=nginx
+   $kubectl get deploy #查看default默认命名空间的deployment无状态服务Pod控制器
+   # 2.通过service暴露端口
+   $kubectl expose deployment nginx --port=80 --type=NodePort
+   # 3.查看默认namespace 的pod及服务信息(获取80的映射端口)]
+   $kubectl get pod,svc
+   ```
+
+   > 参考地址  https://kubernetes.io/zh-cn/docs/reference/kubectl/generated/kubectl_create/kubectl_create_deployment/
+
+   **验证:**
+
+   + 访问`192.168.136.151:31224`成功显示nginx页面
+   + 访问`192.168.136.152:31224`成功显示nginx页面
+   + 访问`192.168.136.153:31224`成功显示nginx页面
+
+   **解析:**
+
+   31224是service暴露Node端口时自动指定的端口,实际上只有node2节点(**随机一个node节点**)真正下载并运行了nginx镜像,但是三个ip都可以访问
 
 ## 8.3 二进制安装k8s
 
 
 
 ## 8.4 命令行工具安装k8s
+
+# 9. *==kubectl==*
+
+Kubernetes提供kubectl是使用kubernetes API与kubernetes集群的控制面板(Control panel)进行通信的命令行工具.\
+
+命令参考文档： https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#-strong-getting-started-strong-
+
+## 9.1 在任意节点上使用kubectl
+
+默认`kubectl`只能在Master节点上使用,在任意Node节点执行失败,提示:
+
+```bash
+The connection to the server localhost:8080 was refused - did you specify the right host or port?
+```
+
+***原因:***
+
+这是因为没有正确配置kubeconfig
+
++  kubectl首先会先检查是否存在`$KUBECONFIG`这个环境变量，如果不存在进行下一步
++  判断`~/.kube/config`配置文件(**该文件就是master节点的/etc/kubernetes/admin.conf文件**)是否存在，如果不存在进行下一步
++  默认访问`localhost:8080`
+
+***解决方法：***
+
++ 方法1：**将master节点下/etc/kubernetes/admin.conf文件内容拷贝到Node节点的**`~/.kube/config`**文件中**
+
+  ```bash
+  $mkdir .kube
+  $scp root@k8s-master:/etc/kubernetes/admin.conf ~/.kube
+  $mv ~/.kube/admin.conf ~/.kube/config
+  $sudo chown $(id -u):$(id -g) ~/.kube/config
+  # ok
+  $kubectl get nodes
+  ```
+
++ 方法2： **将master节点下/etc/kubernetes/admin.conf文件拷贝到Node节点的任意位置，在**`~/.bash_profile`**中配置环境变量KUBECONFIG=admin.conf文件位置**
+
+  ```bash
+  $mkdir .kube
+  $sudo scp root@k8s-master:/etc/kubernetes/admin.conf ~/.kube #放在这里因为etc中需要root权限
+  $sudo chown $(id -u):$(id -g) ~/.kube/admin.conf
+  $echo "export KUBECONFIG=~/.kube/admin.conf" >> ~/.bash_profile
+  $source ~/.bash_profile
+  $kubectl get nodes
+  ```
+
+## 9.2 自动补全
+
+
+
+## 9.3 资源操作
+
+## 9.4 Pod与集群
+
+## 9.5 资源类型与别名
+
+## 9.6 格式化输出
