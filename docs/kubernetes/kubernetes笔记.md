@@ -512,6 +512,8 @@ Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还�
   + **主要用于内部服务器Pod间通信**
   + **工作在TCP/IP四层网络层的，可以实现简单的外部访问**
 
+  ![image-20240921201607444](./_media/image-20240921201607444.png)
+
 + `Ingress`
 
   **Ingress** 是一种控制外部 HTTP(S) 流量如何到达集群内服务的资源。它工作在第 7 层（应用层），允许基于域名、URL 路径、HTTP headers 等路由请求，提供更高级的流量控制和负载均衡功能。
@@ -948,11 +950,11 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
 
 ## 8.4 命令行工具安装k8s
 
-# 9. *==kubectl==*
+# 9. *==kubectl==*命令行工具
 
-Kubernetes提供kubectl是使用kubernetes API与kubernetes集群的控制面板(Control panel)进行通信的命令行工具.\
+Kubernetes提供kubectl是使用kubernetes API与kubernetes集群的控制面板(Control panel)进行通信的命令行工具.
 
-命令参考文档： https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#-strong-getting-started-strong-
+kubectl命令手册参考文档： https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#-strong-getting-started-strong-
 
 ## 9.1 在任意节点上使用kubectl
 
@@ -996,12 +998,349 @@ The connection to the server localhost:8080 was refused - did you specify the ri
 
 ## 9.2 自动补全
 
+ 官网连接：https://kubernetes.io/zh-cn/docs/tasks/tools/install-kubectl-linux/#enable-shell-autocompletion
 
+自动补全实例
 
-## 9.3 资源操作
+```bash
+# 自动补全命令
+kubectl [Tab]
+kubectl get [Tab]
+# 自动补全资源名称
+kubectl describe deployment [Tab]
+# 自动补全命名空间
+kubectl get pods -n [Tab]
+# 自动补全选项
+kubectl get pods --[Tab]
+# 自动补全 context 和 cluster
+kubectl config use-context [Tab]
+# 自动补全日志命令
+kubectl logs [Tab]
+```
+
+***针对bash：***
+
++ 安装依赖包`bash-completion`，会生成`/usr/share/bash-completion/bash_completion`文件
+
++ 将下面命令追加到`~/.bashrc`中
+
+  ```bash
+  $echo "source /usr/share/bash-completion/bash_completion" >> ~/.bashrc
+  $source ~/.bashrc
+  ```
+
++ 执行`type _init_com` 按下tab三次，查看是否会列出命令 （能列出就成功了）
+
++ 然后将kubernetes中自动补全脚本加入环境变量
+
+  ```bash
+  $echo 'source <(kubectl completion bash)' >>~/.bashrc
+  ```
+
++ 如果kubectl有别名，也可以扩展shell补全来适配别名
+
+  ```bash
+  $echo 'source <(kubectl completion bash)' >>~/.bashrc #缩写这个也必须加
+  $echo 'alias k=kubectl' >>~/.bashrc
+  $echo 'complete -o default -F __start_kubectl k' >>~/.bashrc
+  ```
+
++ 更新环境变量`source .bashrc`
+
+## 9.3 *==资源操作==*
+
+P25 4分14
+
++ 创建对象
++ 显示和查找资源
++ 更新资源
++ 修补资源
++ 编辑资源
++ scale资源
++ 删除资源
 
 ## 9.4 Pod与集群
 
++ 与运行的Pod交互
++ 与节点和集权交互
+
 ## 9.5 资源类型与别名
 
++ pods  po
++ deployments  deploy
++ services  svc
++ namespace  ns
++ nodes  no
+
 ## 9.6 格式化输出
+
++ 输出json格式  `-o json`
++ 仅打印资源名称  `-o name`
++ 以纯文本格式输出所有信息  `-o wide`
++ 输出yaml格式  `-o yaml`
+
+# 10. API概述
+
+REST API 是 Kubernetes 的基本结构。 所有操作和组件之间的通信及外部用户命令都是调用 API 服务器处理的 REST API。 因此，Kubernetes 平台视一切皆为 API 对象， 且它们在 [API](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/) 中有相应的定义。
+
+官网文档：https://kubernetes.io/zh-cn/docs/reference/using-api/
+
+## 10.1 API 版本控制
+
++ `Alpha`
+
+  - 版本名称包含 `alpha`（例如：`v1alpha1`）。
+  - 内置的 Alpha API 版本默认被禁用且必须在 `kube-apiserver` 配置中显式启用才能使用。
+  - 软件可能会有 Bug。启用某个特性可能会暴露出 Bug。
+  - 对某个 Alpha API 特性的支持可能会随时被删除，恕不另行通知。
+  - API 可能在以后的软件版本中以不兼容的方式更改，恕不另行通知。
+  - 由于缺陷风险增加和缺乏长期支持，建议该软件仅用于短期测试集群。
+
++ `Beta`
+
+  - 版本名称包含 `beta`（例如：`v1beta1`）。
+  - 内置的 Beta API 版本默认被禁用且必须在 `kube-apiserver` 配置中显式启用才能使用 （例外情况是 Kubernetes 1.22 之前引入的 Beta 版本的 API，这些 API 默认被启用）。
+  - 内置 Beta API 版本从引入到弃用的最长生命周期为 9 个月或 3 个次要版本（以较长者为准）， 从弃用到移除的最长生命周期为 9 个月或 3 个次要版本（以较长者为准）。
+  - 软件被很好的测试过。启用某个特性被认为是安全的。
+  - 尽管一些特性会发生细节上的变化，但它们将会被长期支持。
+
+  - 在随后的 Beta 版或 Stable 版中，对象的模式和（或）语义可能以不兼容的方式改变。 当这种情况发生时，将提供迁移说明。 适配后续的 Beta 或 Stable API 版本可能需要编辑或重新创建 API 对象，这可能并不简单。 对于依赖此功能的应用程序，可能需要停机迁移。
+  - 该版本的软件不建议生产使用。 后续发布版本可能会有不兼容的变动。 一旦 Beta API 版本被弃用且不再提供服务， 则使用 Beta API 版本的用户需要转为使用后续的 Beta 或 Stable API 版本。
+
++ `Stable`
+
+  - 版本名称如 `vX`，其中 `X` 为整数。
+  - 特性的 Stable 版本会出现在后续很多版本的发布软件中。 Stable API 版本仍然适用于 Kubernetes 主要版本范围内的所有后续发布， 并且 Kubernetes 的主要版本当前没有移除 Stable API 的修订计划。
+
+## 10.2 访问控制
+
+官网文档 https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/
+
+用户使用 `kubectl`、客户端库或构造 REST 请求来访问 [Kubernetes API](https://kubernetes.io/zh-cn/docs/concepts/overview/kubernetes-api/)。 人类用户和 [Kubernetes 服务账号](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/configure-service-account/)都可以被鉴权访问 API。 当请求到达 API 时，它会经历多个阶段，如下图所示：
+
+![access-control-overview](./_media/access-control-overview.svg)
+
++ 传输安全
+
+  默认情况下，Kubernetes API 服务器在第一个非 localhost 网络接口的 6443 端口上进行监听， 受 TLS 保护。在一个典型的 Kubernetes 生产集群中，API 使用 443 端口。 该端口可以通过 `--secure-port` 进行变更，监听 IP 地址可以通过 `--bind-address` 标志进行变更。
+
+  API 服务器出示证书。该证书可以使用私有证书颁发机构（CA）签名，也可以基于链接到公认的 CA 的公钥基础架构签名。 该证书和相应的私钥可以通过使用 `--tls-cert-file` 和 `--tls-private-key-file` 标志进行设置。
+
+  如果你的集群使用私有证书颁发机构，你需要在客户端的 `~/.kube/config` 文件中提供该 CA 证书的副本， 以便你可以信任该连接并确认该连接没有被拦截。
+
+  你的客户端可以在此阶段出示 TLS 客户端证书。
+
++ 认证
+
+  如上图步骤 **1** 所示，建立 TLS 后， HTTP 请求将进入认证（Authentication）步骤。 集群创建脚本或者集群管理员配置 API 服务器，使之运行一个或多个身份认证组件。 身份认证组件在[认证](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authentication/)节中有更详细的描述。
+
+  认证步骤的输入整个 HTTP 请求；但是，通常组件只检查头部或/和客户端证书。
+
+  认证模块包含客户端证书、密码、普通令牌、引导令牌和 JSON Web 令牌（JWT，用于服务账号）。
+
+  可以指定多个认证模块，在这种情况下，服务器依次尝试每个验证模块，直到其中一个成功。
+
+  如果请求认证不通过，服务器将以 HTTP 状态码 401 拒绝该请求。 反之，该用户被认证为特定的 `username`，并且该用户名可用于后续步骤以在其决策中使用。 部分验证器还提供用户的组成员身份，其他则不提供。
+
++ 授权
+
+  如上图的步骤 **2** 所示，将请求验证为来自特定的用户后，请求必须被鉴权。
+
+  请求必须包含请求者的用户名、请求的行为以及受该操作影响的对象。 如果现有策略声明用户有权完成请求的操作，那么该请求被鉴权通过。
+
++ 准入控制
+
+  准入控制模块是可以修改或拒绝请求的软件模块。 除鉴权模块可用的属性外，准入控制模块还可以访问正在创建或修改的对象的内容。
+
+  准入控制器对创建、修改、删除或（通过代理）连接对象的请求进行操作。 准入控制器不会对仅读取对象的请求起作用。 有多个准入控制器被配置时，服务器将依次调用它们。
+
+  这一操作如上图的步骤 **3** 所示。
+
+  与身份认证和鉴权模块不同，如果任何准入控制器模块拒绝某请求，则该请求将立即被拒绝。
+
+  除了拒绝对象之外，准入控制器还可以为字段设置复杂的默认值。
+
+  可用的准入控制模块在[准入控制器](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/admission-controllers/)中进行了描述。
+
+  请求通过所有准入控制器后，将使用检验例程检查对应的 API 对象，然后将其写入对象存储（如步骤 **4** 所示）。
+
++ 审计
+
+  Kubernetes 审计提供了一套与安全相关的、按时间顺序排列的记录，其中记录了集群中的操作序列。 集群对用户、使用 Kubernetes API 的应用程序以及控制平面本身产生的活动进行审计。
+
+  更多信息请参考[审计](https://kubernetes.io/zh-cn/docs/tasks/debug/debug-cluster/audit/)。
+
+## 10.3 废弃API说明
+
+官网文档：https://kubernetes.io/zh-cn/docs/reference/using-api/deprecation-guide/
+
++ 注意有些功能在指定版本废弃
+
++ 注意有些功能从测试版本如Beta转移到正式版
+
++ ### 定位何处使用了已弃用的 API
+
+  使用 [1.19 及更高版本中可用的客户端警告、指标和审计信息](https://kubernetes.io/zh-cn/blog/2020/09/03/warnings/#deprecation-warnings) 来定位在何处使用了已弃用的 API
+
++ ### 迁移到未被弃用的 API
+
+  + 安装`kubectl convert`插件： https://kubernetes.io/zh-cn/docs/tasks/tools/install-kubectl-linux/#install-kubectl-convert-plugin
+  + 迁移指南： https://kubernetes.io/zh-cn/docs/reference/using-api/deprecation-guide/#%E8%BF%81%E7%A7%BB%E5%88%B0%E6%9C%AA%E8%A2%AB%E5%BC%83%E7%94%A8%E7%9A%84-api
+
+  
+
+# 11. kubernetes二进制组件介绍(yum包)
+
++ `cri-tools` (Container Runtime Interface Tools)  **用于与k8s中运行的容器进行交互，适用于代替docker的containerd**
+
+  即使用containerd代替docker作为容器引擎时，使用该工具直接和容器进行交互。
+
+  + `crictl`  命令与支持CRI接口的容器进行交互（类似docker命令）
+  + `critest` 用于测试CRI实现是否符合Kubernetes的规范
+
++ `kubeadm`  **k8s集群引导安装工具**
+
++ `kubectl` **k8s命令行工具，直接与k8s集群进行交互**
+
++ `kubelet`  **核心组件，负责管理节点上的所有Pod和容器**
+
+  是节点的核心守护进程，持续确保容器在节点上的运行，接收来自 Kubernetes API Server的指令。主要负责监控容器状态，创建或销毁容器，汇报节点和Pod的健康状态。（最底层的工具）
+
++ `kubernetes-cni`(Container Network Interface)  **提供k8s网络层面的接口和插件**
+
+  提供的CNI插件为容器配置网络，保证不同节点上的Pod间可以通信。
+
+# 12. k8s操作的完整流程
+
+1. **`kubectl` 发送请求到 `kube-apiserver`**：
+   - 当你使用 `kubectl` 命令（如 `kubectl apply` 或 `kubectl create`）时，`kubectl` 会将请求发送到 **`kube-apiserver`**。`kube-apiserver` 是 Kubernetes 集群的 API 入口，负责接收和处理所有请求。
+2. **`kube-apiserver` 处理请求**：
+   - `kube-apiserver` 会验证请求的合法性，并根据请求内容与 **`etcd`** 交互，存储或检索集群的状态数据。比如，当你创建一个 Pod 时，`kube-apiserver` 会将该 Pod 的定义写入到 `etcd` 中。
+3. **调度器和控制器的角色**：
+   - 当 `kube-apiserver` 确认了一个新的 Pod 需要创建时，它不会直接通知 `kubelet`。而是 **`kube-scheduler`** 负责决定哪个节点（Node）可以运行该 Pod。
+   - **`kube-scheduler`** 会检查所有节点的资源情况（如 CPU、内存等），然后选择一个合适的节点，将该 Pod 分配到这个节点。
+4. **`kube-apiserver` 通知对应节点的 `kubelet`**：
+   - 一旦调度器将 Pod 分配到某个节点上，**`kube-apiserver`** 会通知该节点上的 **`kubelet`**，让 `kubelet` 在该节点上启动相应的容器。
+   - `kubelet` 从 `kube-apiserver` 获取 Pod 定义，然后根据定义拉取镜像、创建容器，并监控容器的运行状态。
+
+> ### **`kube-controller-manager` 的作用**
+>
+> `kube-controller-manager` 并不会参与每次的 Pod 创建请求。它的主要职责是通过控制循环（control loop）来持续监控集群的状态，并根据需要执行相应的操作，比如：
+>
+> - 确保 Pod 副本数正确（如 Deployment 或 ReplicaSet 控制器）。
+> - 处理节点状态变化（如节点失效）。
+> - 监控资源对象（如 PersistentVolume 和 PersistentVolumeClaim 的绑定）。
+
+# 13. *==namespace和Master,Node,Pods,Service的关系==*
+
+## 13.1 关系
+
+1. 首先牢记命名空间**namespace是一个虚拟概念**,用于进行**Node节点上的资源的逻辑隔离**（如Pod，Service）
+
+2. 总的来说命名空间**namespace是针对整个集群**来说的，它**并不会只存在Node节点**上，但是它的**作用更多体现在Node节点**上（因为我们一般操作的具体实现都是在Node节点上）
+
+3. kubernetes集群有下面四个默认命名空间namespace
+
+   + `default` 
+
+     k8s默认的命名空间，用于**存放没有指定命名空间的资源**如Pod，Service
+
+   + `kube-node-lease`
+
+     **用于管理节点的租约（lease）**，通过租约对象来确认节点的健康状态。
+
+   + `kube-public`
+
+     用于存放公共资源，可被所有用户获取（包括未认证的用户）。一般用于存放集群的公共信息。
+
+   + `kube-system`
+
+     用于存放kubernetes系统级别的组件和服务。如**kube-apiserver,kube-scheduler,kube-controller-manager,etcd,coredns,kube-proxy**。用户一般不应在此命名空间进行数据的修改
+
+   + 其他
+
+     用户通过**kubectl create namespace xxx**创建的
+
+4. **一个命名空间namespace可以有多个独立的Node节点，同样一个Node节点可以有多个命名空间namespace**
+
+5. **service是一个逻辑对象，它本身并不会绑定到某个特点的Node**，他是集群范围内的资源。
+
+   Service转发流量的具体步骤
+
+   + 客户端(通常是其他Pod)请求Service的 `ClusterIP` 或 `NodePort` 访问服务
+
+   + kube-proxy捕获流量，**流量总是首先在发起请求的 Node 上被捕获**
+
+     即如果我使用node1的ip:port访问那么就先被node1上kube-proxy捕获；如果我使用master的ip:port访问那么就先被master上kube-proxy捕获；
+
+   + 流量转发到Pod
+
+     `kube-proxy` 通过 `Endpoints` 对象查找当前与 Service 关联的 Pod 的 IP 地址，并将流量转发到这些 Pod 上。如果有多个 Pod，`kube-proxy` 还会对流量进行负载均衡，将流量分配给不同的 Pod
+
+6. 1
+
+## 13.2 实际服务架构图
+
+```bash
+# 查看所有节点的所有命名空间下pods（master机器）
+$kubectl get pods --all-namespaces -o wide
+#命名空间	   Pods的名字							                                                             归属节点
+NAMESPACE     NAME                                     READY   STATUS    RESTARTS      AGE   IP                NODE         NOMINATED NODE   READINESS GATES
+default       nginx-85b98978db-dbjl7                   1/1     Running   1 (12h ago)   18h   10.244.169.130    k8s-node2    <none>           <none>
+kube-system   calico-kube-controllers-cd8566cf-d7twm   1/1     Running   1 (12h ago)   18h   10.244.235.196    k8s-master   <none>           <none>
+kube-system   calico-node-d9vdx                        1/1     Running   1 (12h ago)   18h   192.168.136.153   k8s-node2    <none>           <none>
+kube-system   calico-node-dl2jm                        1/1     Running   1 (12h ago)   18h   192.168.136.152   k8s-node1    <none>           <none>
+kube-system   calico-node-swl7r                        1/1     Running   1 (12h ago)   18h   192.168.136.151   k8s-master   <none>           <none>
+kube-system   coredns-6c589f9dc8-67stg                 1/1     Running   1 (12h ago)   36h   10.244.235.198    k8s-master   <none>           <none>
+kube-system   coredns-6c589f9dc8-fkjfc                 1/1     Running   1 (12h ago)   36h   10.244.235.197    k8s-master   <none>           <none>
+kube-system   etcd-k8s-master                          1/1     Running   3 (12h ago)   36h   192.168.136.151   k8s-master   <none>           <none>
+kube-system   kube-apiserver-k8s-master                1/1     Running   3 (12h ago)   36h   192.168.136.151   k8s-master   <none>           <none>
+kube-system   kube-controller-manager-k8s-master       1/1     Running   3 (12h ago)   36h   192.168.136.151   k8s-master   <none>           <none>
+kube-system   kube-proxy-8c6h6                         1/1     Running   2 (12h ago)   36h   192.168.136.151   k8s-master   <none>           <none>
+kube-system   kube-proxy-9bgbp                         1/1     Running   1 (12h ago)   23h   192.168.136.152   k8s-node1    <none>           <none>
+kube-system   kube-proxy-wgb4z                         1/1     Running   1 (12h ago)   23h   192.168.136.153   k8s-node2    <none>           <none>
+kube-system   kube-scheduler-k8s-master                1/1     Running   3 (12h ago)   36h   192.168.136.151   k8s-master   <none>           <none>
+# 查看master机器上运行的镜像
+$sudo docker ps
+CONTAINER ID   IMAGE                            COMMAND                  CREATED       STATUS       PORTS     NAMES
+4335e2434fb4   a4ca41631cc7                     "/coredns -conf /etc…"   6 hours ago   Up 6 hours             k8s_coredns_coredns-6c589f9dc8-67stg_kube-system_65b3a6d9-d59d-4964-9865-12d26da04e4a_1
+2c935be5d5f6   5e785d005ccc                     "/usr/bin/kube-contr…"   6 hours ago   Up 6 hours             k8s_calico-kube-controllers_calico-kube-controllers-cd8566cf-d7twm_kube-system_7c20615f-dbcc-4d81-9979-fa0494bb48bf_1
+7eaf0a6c9243   a4ca41631cc7                     "/coredns -conf /etc…"   6 hours ago   Up 6 hours             k8s_coredns_coredns-6c589f9dc8-fkjfc_kube-system_caaa1d1a-1521-4df7-a231-9c3545bc5a44_1
+18bec59f5a25   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_calico-kube-controllers-cd8566cf-d7twm_kube-system_7c20615f-dbcc-4d81-9979-fa0494bb48bf_1
+7b2511dac205   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_coredns-6c589f9dc8-fkjfc_kube-system_caaa1d1a-1521-4df7-a231-9c3545bc5a44_1
+a23fd851bee2   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_coredns-6c589f9dc8-67stg_kube-system_65b3a6d9-d59d-4964-9865-12d26da04e4a_1
+dc3138971e62   08616d26b8e7                     "start_runit"            6 hours ago   Up 6 hours             k8s_calico-node_calico-node-swl7r_kube-system_b533dad4-eddf-4aac-9f2c-ce8e0292ea44_1
+f38f2e8c26af   f21c8d21558c                     "/usr/local/bin/kube…"   6 hours ago   Up 6 hours             k8s_kube-proxy_kube-proxy-8c6h6_kube-system_0164b092-fa39-4d60-b442-0831af0c0c4d_2
+fe21bca2b816   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_kube-proxy-8c6h6_kube-system_0164b092-fa39-4d60-b442-0831af0c0c4d_2
+aaff0a4acc09   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_calico-node-swl7r_kube-system_b533dad4-eddf-4aac-9f2c-ce8e0292ea44_1
+39dc9e2b7592   bc6794cb54ac                     "kube-scheduler --au…"   6 hours ago   Up 6 hours             k8s_kube-scheduler_kube-scheduler-k8s-master_kube-system_7e8fba312777c9f532929fe2de7c92e2_3
+ea968a407f7e   fce326961ae2                     "etcd --advertise-cl…"   6 hours ago   Up 6 hours             k8s_etcd_etcd-k8s-master_kube-system_e4141eacc0c450719ed09b54d2d69c40_3
+a9b210b32262   62bc5d8258d6                     "kube-apiserver --ad…"   6 hours ago   Up 6 hours             k8s_kube-apiserver_kube-apiserver-k8s-master_kube-system_57834d4fe8b2ebf45791546ea3a1bc0c_3
+b2fd9e1685b8   1dab4fc7b6e0                     "kube-controller-man…"   6 hours ago   Up 6 hours             k8s_kube-controller-manager_kube-controller-manager-k8s-master_kube-system_938993adf594905f50e27529f0563f97_3
+2c472200aae1   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_kube-scheduler-k8s-master_kube-system_7e8fba312777c9f532929fe2de7c92e2_2
+c591b9cb2fa8   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_kube-controller-manager-k8s-master_kube-system_938993adf594905f50e27529f0563f97_2
+f04bd5cfddad   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_kube-apiserver-k8s-master_kube-system_57834d4fe8b2ebf45791546ea3a1bc0c_2
+c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours ago   Up 6 hours             k8s_POD_etcd-k8s-master_kube-system_e4141eacc0c450719ed09b54d2d69c40_2
+```
+
+> 从上面可以看出**kube-system命名空间中Pod在Master机器上一共有9个，对应这Master机器上18个docker容器（每个pod都有一个pause容器）**
+
+与实际对应的结构图如下：
+
+![image-20240921175621302](./_media/image-20240921175621302.png)
+
+![image-20240921175221835](./_media/image-20240921175221835.png)
+
+![image-20240921175307764](./_media/image-20240921175307764.png)
+
+![image-20240921175315579](./_media/image-20240921175315579.png)
+
+***说明：***
+
+1. 命名空间namespace是针对整个集群而不是某个节点
+
+2. 服务service是针对整个集群而不是某个节点
+
+   ![image-20240921201554488](./_media/image-20240921201554488.png)
+
+3. 两个coredns一个服务service-cidr，一个服务pod-cidr
