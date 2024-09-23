@@ -575,9 +575,21 @@ Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还�
 
 # 6. 资源清单(资源配置文件)
 
-**其实就是资源变量**  https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/
+**其实就是资源变量(配置谁就进入对应的资源如Pod)**  https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/
 
 Kubernetes (K8s) 中的资源（Resource）可以分为多种类型，涵盖从核心的计算资源（如 Pod 和 Node）到更高层的网络、存储和安全管理工具。这些资源通常定义在 YAML 或 JSON 文件中，称为 **资源清单（Resource Manifest）**，并用于管理 Kubernetes 集群中的对象。
+
+***举例：Pod***
+
+```yaml
+apiVersion: v1 #k8s API版本可以使用kubectl api version获取
+kind: Pod #yaml文件定义的资源类型和角色
+metadata: xxxx(可以细分) #元数据类型
+spec: xxxx（可以细分） #详细定义对象
+status: xxxx（可以细分） #实际状态
+```
+
+![image-20240923145918750](./_media/image-20240923145918750.png)
 
 # 7. 对象规约和状态
 
@@ -1344,3 +1356,190 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
    ![image-20240921201554488](./_media/image-20240921201554488.png)
 
 3. 两个coredns一个服务service-cidr，一个服务pod-cidr
+
+# 14. ==*深入Pod*==
+
+## 14.1 Pod的配置文件
+
+基于Pod的资源清单构建: https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#Pod
+
+> 所有可配置属性都在页面中
+
+***基于配置文件创建Pod:***
+
++ 编写yaml `pod-nginx-demo.yaml`
+
+  ```yaml
+  apiVersion: v1 #请求的api版本
+  kind: Pod #作用资源类型
+  metadata: #元数据，用于描述Pod资源的信息如Pod名字，所属namespace
+    name: nginx-demo #Pod的名称
+    namespace: demo  #Pod所属命名空间(必须以及存在，否则会报错),不写默认为default，生产应用应该自己另建namespace，
+    labels: #定义Pod的标签，用于selector选择器使用（用于筛选）,键值对均为自己自定义(随便写)
+      type: app
+      version: v1
+    annotations: #注解，用于展示额外信息(随便写)
+      maintainer: ly
+      target: test
+      
+  spec: #期望Pod状态
+    containers: #容器描述
+      - name: c-nginx-demo-1 #容器名称
+        image: 192.168.31.79:5000/nginx:latest@sha256:596c783ac62b9a43c60edb876fe807376cd5022a4e25e89b9a9ae06c374299d4 #镜像信息，可以携带详细，也可以不详细
+        imagePullPolicy: IfNotPresent #默认为IfNotPresent，如果带latest标签则默认为always
+        env: #设置容器的环境变量值(随便)
+          - name: maintainer
+            value: ly
+        ports: #端口
+          - name: http #开放端口名(随意)
+            containerPort: 80 #开放容器内端口(k8s集群机器可以访问,如果要让其他机器访问需要搭配service)
+            protocol: TCP #支持TCP(默认),UDP或SCTP
+        resources: #此容器的资源限制
+          requests: #此容器最小资源限制
+            cpu: 100m #最少100/1000=0.1 个核心
+            memory: 50Mi #最小50MB内存,注意大小写400m表示0.4字节
+          limits: #此容器最大资源限制
+            cpu: 200m # 最多200/1000=0.2个核心
+            memory: 150Mi #最大150MB内存
+        command: #执行的命令(如果未指定则使用镜像的ENTRYPOINT)
+          - nginx #多命令将会整合成一个命令
+        args: #命令的参数(如果未指定则使用镜像的CMD)
+          - -g
+          - 'daemon off;' #nginx -g 'daemon off;' nginx前台运行
+        workingDir: /usr/share/nginx/html #容器工作目录(如果未指定则使用镜像的WORKINGDIR)
+    restartPolicy: OnFailure #此Pod的生命周期Always(只要退出就重启,默认),OnFailure(仅在退出码非0时重启),Never(退出不重启)
+    # .... #还有很多
+  
+  ```
+
++ 执行命令创建Pod
+
+  ```bash
+  $kubectl create -f pod-nginx-demo.yaml
+  ```
+
++ 查看Pod状态
+
+  ```bash
+  $kubectl get pods -n demo -o wide 
+  #获取容器状态为 ContainerCreating 
+  # CrashLoopBackOff 表示出错
+  # Completed表示创建完成 不为running状态请查看容器是否退出了(确保容器命令是前台运行)
+  # Running表示正在运行
+  ```
+
++ k8s集群内可以访问,外部机器无法访问
+
+  ```bash
+  $curl ip:port
+  ```
+
+  基于CNI网络插件calico,集群内部机器可以通过ip:port访问nginx。**但是，kubectl get pod或kubectl get svc并无法看到映射的80端口**。可以通过`route -n`对照Node节点的ip查看路由信息。如果需要向集群外暴露端口则需要service，ingress
+
++ 排错,如果出现错误可以通过以下命令排错
+
+  ```bash
+  $kubectl get pods -n demo -o wide  #查看pod状态
+  $kubectl describe pod名 -n demo #查看pod event进度可能会报错，pulling等等
+  # 确定Node节点机器上
+  $sudo docker ps -a #查看容器是否在运行，或退出(用于确定镜像ENTRYPOINT是否正确即前台运行)
+  
+  #注意容器名 ，可以通过yaml-pod配置文件获取，或kubectl describe pod获取容器名
+  $kubectl logs Pod名 -c yaml中定义的容器名 -n demo #此容器名并不是docker中容器名 !!!!!
+  ```
+
+> `kubectl get pod pod名字 -o yaml`就可以获取pod的配置文件
+
+## 14.2 探针（针对容器内部应用）
+
+探针配置文档： https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F-1
+
+探针配置示例：https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+
+### 14.2.1 三种探针
+
+**容器内应用(生命周期)的检测机制**，kubelet通过以下三种不同的探针来判断容器应用当前的状态。
+
++ **启动探针** `StartupProbe`  检查容器内的应用是否已启动（对于启动耗时久的应用）
+
+   启动探针可以**用于对慢启动容器进行存活性检测**，避免它们在启动运行之前就被 kubelet 杀掉。
+
+  如果配置了这类探针，它**会禁用存活检测和就绪检测，直到启动探针成功其他两个探针才会继续。这类探针仅在启动时执行，不像存活探针和就绪探针那样周期性地运行。**
+
++ **存活探针** `LivenessProbe`  确定什么时候要重启容器
+
+  存活探针可以探测到应用死锁（应用在运行，但是无法继续执行后面的步骤）情况。 根据重启策略重启，这种状态下的容器有助于提高应用的可用性，即使其中存在缺陷。**如果没有配置，默认容器退出就是启动成功了（挂了就挂了）**。
+
+  如果一个容器的存活探针失败多次，kubelet 将重启该容器。**存活探针不会等待就绪探针成功。 如果你想在执行存活探针前等待**，你可以定义 `initialDelaySeconds`，或者使用[启动探针](https://kubernetes.io/zh-cn/docs/concepts/configuration/liveness-readiness-startup-probes/#startup-probe)。
+
++ **就绪探针** `ReadinessProbe`  确认容器何时准备好接受请求流量（初始化已完成）
+
+  **当一个 Pod 内的所有容器都就绪时，才能认为该 Pod 就绪**。这种探针在等待应用**执行耗时的初始任务**时非常有用，例如建立网络连接、加载文件和预热缓存。
+
+  如果就绪探针返回的状态为**失败**，Kubernetes 会将该 Pod 从所有对应服务的端点中移除。**就绪探针在容器的整个生命期内持续运行。**
+
+> 启动探针启用会临时禁止另外两个探针，直至启动探针成功，另外两个探针才会继续运行。（只运行一次，另外两个探针持续运行）
+
+### 14.2.2 三种探测方式
+
+三种探针针对不用的场景，但是它们拥有相同的三种探测方式：
+
++ `ExecAction`  **通过执行命令**
+
+  在容器内部执行一个命令，如果命令返回值为0代表是健康的。 	
+
++ `HTTPGetAction`  **通过执行HTTP请求**   
+
+  生产环境用的比较多，通过配置HTTP请求到容器内部应用，如果接口返回的**状态码是200-400**之间，则认为容器健康。
+
++ `TCPSockerAction`  **tcp端口连接检测**
+
+  通过tcp连接监测容器内端口是否开放，如果开放则证明该容器健康。（是否能连上）
+
+### 14.2.3 探针probe其他参数配置
+
+配置项：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#Probe
+
++ `initialDelaySeconds` 
+
+  初始延迟秒 指 容器启动后延迟多久启动存活探针
+
++ `timeoutSeconds` 
+
+  探针超时的秒数，默认1秒，最小1s
+
++ `periodSeconds` 
+
+  探针的执行周期，单位秒，默认10s，最小1s
+
++ `successThreshold` 
+
+  探针失败后最小连续成功次数，超过此阈值才认为探针成功。 默认1，最小值为1，存活/启动探针必须为1
+
++ `failureThreshold` 
+
+  探针成功后的最小连续失败次数，超过此阈值则认为探针失败。默认3，最小值为1
+
++ `grpc` GRPC 指定涉及 GRPC 端口的操作。
+
+```yaml
+sepc:
+  containers:
+    - name: 容器名
+      ...
+      # 三种探针都属于probe
+      livenessProbe:
+        exec:
+        httpGet:
+        tcpSocket:
+        initialDelaySeconds: #初始延迟秒 指 容器启动后延迟多久启动存活探针
+        timeoutSeconds: #探针超时的秒数，默认1秒，最小1s
+        periodSeconds: #探针的执行周期，单位秒，默认10s，最小1s
+        successThreshold: #探针失败后最小连续成功次数，超过此阈值才认为探针成功。 默认1，最小值为1，存活/启动探针必须为1
+        failureThreshold: #探针成功后的最小连续失败次数，超过此阈值则认为探针失败。默认3，最小值为1
+      readinessProbe:
+      startupProbe:
+     ...
+```
+
+## 14.3 Pod的生命周期

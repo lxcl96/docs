@@ -473,7 +473,7 @@ docker容器其实就是一个精简的OS,`rootfs`可以很小,只需要包含�
   ```bash
   # 容器的默认仓库会被创建在/var/lib/registry下
   # -v指定卷地址映射,不使用默认仓库地址 [将主机/home/ly/test/docker目录映射到容器/home/registry]
-  docker run -d -p 5000:5000 -v /home/ly/test/docker/:/home/registry  --privileged=true registry
+  docker run -d -p 5000:5000 -v /home/ly/test/docker/:/home/registry --restart=always --privileged=true registry
   ```
 
 + 查看当前私有库存在的镜像(可用于验证私有库是否正确运行)
