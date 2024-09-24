@@ -1361,6 +1361,8 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 
 ## 14.1 Pod的配置文件
 
+在 Kubernetes 中，Pod 是最小的可部署的计算单元，它是一组容器的集合，共享同一个网络命名空间、存储卷等资源
+
 基于Pod的资源清单构建: https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#Pod
 
 > 所有可配置属性都在页面中
@@ -1406,8 +1408,37 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
         args: #命令的参数(如果未指定则使用镜像的CMD)
           - -g
           - 'daemon off;' #nginx -g 'daemon off;' nginx前台运行
+        startupProbe: #启动探针
+          exec: #使用ExecAction获取状态
+            #command: ['/bin/bash','-c','expr `ps -ef|grep nginx|grep -v nginx|wc -l` \> 0'] #nginx容器没有ps命令
+            command: ['/bin/bash','-c','cat /usr/share/nginx/html/index.html']
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+            
+        livenessProbe: #存活探针
+          httpGet: #使用HTTPGetAction获取状态
+            port: 80
+            path: /
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe: #就绪探针
+          tcpSocket: #使用TCPSocketAction获取状态
+            port: 80 #只要该tcp端口是通的就判断成功
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
         workingDir: /usr/share/nginx/html #容器工作目录(如果未指定则使用镜像的WORKINGDIR)
-    restartPolicy: OnFailure #此Pod的生命周期Always(只要退出就重启,默认),OnFailure(仅在退出码非0时重启),Never(退出不重启)
+    restartPolicy: OnFailure #此Pod内所有容器的的重启策略Always(只要退出就重启,默认),OnFailure(仅在退出码非0时重启),Never(退出不重启)
     # .... #还有很多
   
   ```
@@ -1416,6 +1447,8 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 
   ```bash
   $kubectl create -f pod-nginx-demo.yaml
+  # 第一次出错导致pod启动失败,修改配置文件重新启动 (实际支持项很少)
+  $kubectl apply -f pod-nginx-demo.yaml
   ```
 
 + 查看Pod状态
@@ -1448,7 +1481,7 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
   $kubectl logs Pod名 -c yaml中定义的容器名 -n demo #此容器名并不是docker中容器名 !!!!!
   ```
 
-> `kubectl get pod pod名字 -o yaml`就可以获取pod的配置文件
+> `kubectl get pod pod名字 -o yaml/json`就可以获取pod的配置文件(探针不会写看官方文档,也可以看此参考)
 
 ## 14.2 探针（针对容器内部应用）
 
@@ -1460,21 +1493,21 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 
 **容器内应用(生命周期)的检测机制**，kubelet通过以下三种不同的探针来判断容器应用当前的状态。
 
-+ **启动探针** `StartupProbe`  检查容器内的应用是否已启动（对于启动耗时久的应用）
++ **启动探针** `StartupProbe`  检查容器内的应用是否已启动（对于启动耗时久的应用）**更新get pod的status状态**
 
    启动探针可以**用于对慢启动容器进行存活性检测**，避免它们在启动运行之前就被 kubelet 杀掉。
 
   如果配置了这类探针，它**会禁用存活检测和就绪检测，直到启动探针成功其他两个探针才会继续。这类探针仅在启动时执行，不像存活探针和就绪探针那样周期性地运行。**
 
-+ **存活探针** `LivenessProbe`  确定什么时候要重启容器
++ **存活探针** `LivenessProbe`  确定什么时候要重启容器  **更新get pod的restart和status状态**
 
   存活探针可以探测到应用死锁（应用在运行，但是无法继续执行后面的步骤）情况。 根据重启策略重启，这种状态下的容器有助于提高应用的可用性，即使其中存在缺陷。**如果没有配置，默认容器退出就是启动成功了（挂了就挂了）**。
 
   如果一个容器的存活探针失败多次，kubelet 将重启该容器。**存活探针不会等待就绪探针成功。 如果你想在执行存活探针前等待**，你可以定义 `initialDelaySeconds`，或者使用[启动探针](https://kubernetes.io/zh-cn/docs/concepts/configuration/liveness-readiness-startup-probes/#startup-probe)。
 
-+ **就绪探针** `ReadinessProbe`  确认容器何时准备好接受请求流量（初始化已完成）
++ **就绪探针** `ReadinessProbe`  确认容器何时准备好接受请求流量（初始化已完成） **更新get pod的ready状态**
 
-  **当一个 Pod 内的所有容器都就绪时，才能认为该 Pod 就绪**。这种探针在等待应用**执行耗时的初始任务**时非常有用，例如建立网络连接、加载文件和预热缓存。
+  **当一个 Pod 内的所有容器都就绪时，才能认为该 Pod 就绪**。这种探针在等待应用**执行耗时的初始任务**时非常有用，例如建立网络连接、加载文件和预热缓存。**本地即集群内网络可以访问,Service和ingress不能访问**
 
   如果就绪探针返回的状态为**失败**，Kubernetes 会将该 Pod 从所有对应服务的端点中移除。**就绪探针在容器的整个生命期内持续运行。**
 
@@ -1499,6 +1532,8 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 ### 14.2.3 探针probe其他参数配置
 
 配置项：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#Probe
+
+> 每个一个探针都可以配置其他参数(不是只需要一个)
 
 + `initialDelaySeconds` 
 
@@ -1542,4 +1577,222 @@ sepc:
      ...
 ```
 
-## 14.3 Pod的生命周期
+## 14.3 直接编辑Pod配置文件
+
+> ***因为我们是直接创建Pod不是通过deployment等Pod控制器创建的,所以热更新会有限制(不推荐直接创建Pod)***
+
++ 直接修改运行中的Pod (如修改Env)
+
+  ```bash
+  #使用vi编辑器
+  $kubectl edit nginx-demo -n demo
+  ```
+
++ 提示修改出错
+
+  ```
+  * spec: Forbidden: pod updates may not change fields other than `spec.containers[*].image`, `spec.initContainers[*].image`, `spec.activeDeadlineSeconds`, `spec.tolerations` (only additions to existing tolerations) or `spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)
+  ```
+
++ **只允许修改以下字段**
+
+  + `spec.containers[*].image`
+  + `spec.initContainers[*].image`
+  + `spec.activeDeadlineSeconds`
+  + `spec.tolerations` (只允许添加新选项,不允许删除)
+  + `spec.terminationGracePeriodSeconds`(只允许将其设置为1,如果直接为负值)
+
+## 14.5 pod重启冷却实际
+
+**第一次失败**：等待约 **10秒** 后重启。
+
+**第二次失败**：等待约 **20秒** 后重启。
+
+**第三次失败**：等待约 **40秒** 后重启。
+
+**第四次失败**：等待约 **80秒** 后重启。
+
+**第五次失败**：等待约 **160秒** 后重启。
+
+**之后的重启**：等待时间继续增加，直到达到最大冷却时间 **5分钟**。
+
+```bash
+$kubectl describe pod名字
+
+Last State:   Terminated
+    Reason:    Error
+    Exit Code: 1
+    ...
+Restart Count: 7
+Message:      Back-off 5m0s restarting failed container # 5m0s 表示下次重启在5分钟后
+```
+
+## 14.6 Pod的生命周期
+
+> 注意Pod生命周期和容器的生命周期
+
+介绍文档: https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/pod-lifecycle/#pod-phase
+
+Pod配置文件： https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F
+
+### 14.6.1 Pod阶段(phase)
+
+Pod阶段(Phase)是Pod在其生命周期中所处位置的简单宏观概述。一共下面5种状态：
+
++ `Pending`（**悬决**）
+
+  创建Pod对象后，这是其初始阶段。在Pod被调度到节点并且拉取、启动其容器前，他一直处于此阶段。
+
++ `Running`（**运行中**）
+
+  该Pod中至少有一个容器正在运行。只要有一个容器正在运行（或者是启动或重启），该Pod就是Running。
+
++ `Succeeded`（**成功**）
+
+  Pod内所有容器全部成功完成运行（即全部成功退出），且不打算无限期运行的Pod就标记为Succeeded。
+
++ `Failed`（**失败**）
+
+  Pod中所有容器都终止，并且至少有一个容器是失败退出的。（即至少有一个退出码非0，且没有自动重启）
+
++ `Unknown`（**未知**）
+
+  因为某些原因无法获取Pod的状态，一般都是网络问题。
+
+> **注意区分Pod的阶段（Phase）和**`kubectl get pods`**获取的**`Status`**(有CrashLoopBackOff，Terminating)，这两个不是一个东西。**
+>
+> ```bash
+> #status.phase就代表Pod的状态
+> $kubectl get pod xxx -o yaml
+> #这样输出的status只是用于用户直观查看
+> $kubectl get pod -o wide
+> ```
+
+![v2-16755087ae86befddd3b46ad508b385c](./_media/v2-16755087ae86befddd3b46ad508b385c.webp)
+
+### 14.6.2 容器的状态（Status）
+
+Kubernetes 会跟踪 Pod 中每个容器的状态，就像它跟踪 Pod 总体上的[阶段](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/pod-lifecycle/#pod-phase)一样。 你可以使用[容器生命周期回调](https://kubernetes.io/zh-cn/docs/concepts/containers/container-lifecycle-hooks/) 来在容器生命周期中的特定时间点触发事件。其一共有下面三种状态：
+
++ `Waiting`（**等待**）
+
+  如果容器并不处在 `Running` 或 `Terminated` 状态之一，它就处在 `Waiting` 状态。 处于 `Waiting` 状态的容器仍在运行它完成启动所需要的操作：例如， 从某个容器镜像仓库拉取容器镜像，或者向容器应用 [Secret](https://kubernetes.io/zh-cn/docs/concepts/configuration/secret/) 数据等等。
+
++ `Running`（**运行中**）
+
+  `Running` 状态表明容器正在执行状态并且没有问题发生。 如果配置了 `postStart` 回调，那么该回调已经执行且已完成。
+
++ `Terminated`（**已终止**）
+
+  处于 `Terminated` 状态的容器开始执行后，或者运行至正常结束或者因为某些原因失败。
+
+> 可以使用命令`kubectl describe pods xxx`查看容器的详细信息（如状态，原因，退出码，启动时间，退出时间，重启次数等等）
+>
+> `kubectl get pod xxx -o yaml`是获取Pod及容器的配置信息(有些许区别)
+
+![v2-8e21d94d09cccf05240d22ab7c8a90fc](./_media/v2-8e21d94d09cccf05240d22ab7c8a90fc.webp)
+
+### 14.6.3 Pod的生命周期
+
+Pod的生命周期一共包含下面三个状态：
+
++ **初始化阶段，Pod的init容器运行**
+
+  + 拉取镜像(三种策略always,ifnotpresent,never)
+  + 运行init容器（**按照顺序依次运行，如果有一个失败了就算Pod失败。如果有重启策略会根据，pod和init容器特有的**`restartPolcy`**重启容器，Pod**）
+  + 启动pause容器，做网络和存储准备
+  + 准备环境变量，用于pod容器中
+  + volume卷挂载
+
+  > Init 容器不可以有生命周期操作、就绪态探针、存活态探针或启动探针.(**init不需要一直运行，初始化任务完成后就自动销毁**)
+
++ **运行阶段，Pod的应用容器在该阶段运行**
+
+  + 启动容器(**按照定义顺序启动，就是调用command**)
+  + 执行`postStart`钩子函数（与容器主进程是异步运行，可能会影响到容器的启动）
+  + 三种探针（启动，存活，就绪）获取状态，并搭配**Pod的重启策略进行重启（普通容器没有重启策略，只有pod和init容器有）**
+  + 提供应用容器服务
+
++ **终止阶段，Pod内部容器全部被终止，Pod也被终止**
+
+  + Endpoint删除Pod的ip地址
+  + Pod变为Terminating状态(不是阶段)
+  + 终止前先调用`preStop`钩子函数（并行。一般用于销毁前操作，如数据备份，保存日志，服务中心下线）
+  + 根据Pod的`terminationGracePeriodSeconds`参数，默认是`30秒`。即**最多等待30秒，如果prestop等操作导致Pod还没结束就强制终止容器和Pod**。可以使用`--force`跳过等待
+
+> Pod生命周期管理都是通过kubelet实现的
+
+![image-20240924225206105](./_media/image-20240924225206105.png)
+
+### 14.6.4 Pod的状态（与Phrase区别）
+
+Pod除了**Pending,Running,Succeeded,Failed,Unknown**五大阶段（Phrase），还有以下特殊的条件状态，可以在`kubectl get/describe`中获取信息：
+
+- **PodScheduled**：表示 Pod 是否已经被调度到了节点上。
+- **ContainersReady**：表示 Pod 中的所有容器是否已经准备就绪。
+- **Initialized**：表示 Pod 中的所有容器是否已经初始化。
+- **Ready**：表示 Pod 是否已经准备就绪，即所有容器都已经启动并且可以接收流量。
+- **CrashLoopBackOff**： 容器退出，kubelet正在将它重启
+- **InvalidImageName**： 无法解析镜像名称
+- **ImageInspectError**： 无法校验镜像
+- **ErrImageNeverPull**： 策略禁止拉取镜像
+- **ImagePullBackOff**： 正在重试拉取
+- **RegistryUnavailable**： 连接不到镜像中心
+- **ErrImagePull**：通用的拉取镜像出错
+- **CreateContainerConfigError**： 不能创建kubelet使用的容器配置
+- **CreateContainerError**： 创建容器失败
+- **m.internalLifecycle.PreStartContainer** 执行hook报错
+- **RunContainerError**： 启动容器失败
+- **PostStartHookError**： 执行hook报错
+- **ContainersNotInitialized**： 容器没有初始化完毕
+- **ContainersNotReady**： 容器没有准备完毕
+- **ContainerCreating**：容器创建中
+- **PodInitializing**：pod 初始化中
+- **DockerDaemonNotReady**：docker还没有完全启动
+- **NetworkPluginNotReady**： 网络插件还没有完全启动
+- **Evicte**: pod被驱赶
+
+### 14.6.5 Pod生命周期配置
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-demo
+  namespace: demo
+  labels:
+    type: app
+    version: v1
+
+spec:
+  containers:
+    - name: c-nginx-demo-1
+      image: 192.168.31.79:5000/nginx:latest #必须加仓库地址,否则会重新下载(tag不同了)
+      imagePullPolicy: IfNotPresent
+      ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+      command:
+        - nginx
+      args:
+        - -g
+        - 'daemon off;'
+      lifecycle: #容器的生命周期
+        postStart: #执行nginx容器command后立即执行
+          exec: #ExecAction方式，还有HTTPGetAction
+            command: ['/bin/bash','-c','echo postStart-ok > /usr/share/nginx/html/lifecycle.html']
+        preStop:
+          exec: #ExecAction方式，还有HTTPGetAction
+            command: ['/bin/bash','-c','sleep 40;echo preStop-ok >> /usr/share/nginx/html/lifecycle.html;sleep 30'] #测试terminationGracePeriodSeconds
+  initContainers: #init容器先执行，不允许有生命周期操作
+    - name: init-hello-world
+      image: 192.168.31.79:5000/alpine:latest
+      imagePullPolicy: IfNotPresent
+      command: ['/bin/sh','-c','echo "1">/home/ok;sleep 120'] 
+      #restartPolicy: Always #低版本init容器没有该策略
+  restartPolicy: OnFailure #pod内所有容器的重启策略
+  terminationGracePeriodSeconds: 70 #关闭Pod前运行继续运行的时间，默认是30（不是马上销毁Pod） 期间内服务还可以访问
+```
+
+> init容器执行初始化必须退出，否则一直是初始化状态，不会启动容器（执行command）
