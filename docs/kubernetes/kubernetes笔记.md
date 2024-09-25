@@ -1796,3 +1796,382 @@ spec:
 ```
 
 > init容器执行初始化必须退出，否则一直是初始化状态，不会启动容器（执行command）
+
+# 15. 资源调度(Pod控制器)
+
+通过上面创建原生Pod我们发现其一些缺点：无法进行扩/缩容，无法编辑Pod配置文件进行热更新等等。所以我们需要引入Pod控制器。
+
+## 15.1 Label和Selector
+
+### 15.1.1 Label 标签
+
+**标签（Labels）** 是附加到 Kubernetes [对象](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/#kubernetes-objects)（比如 Pod）上的键值对。 标签旨在用于指定对用户有意义且相关的对象的标识属性，但不直接对核心系统有语义含义。 标签可以用于组织和选择对象的子集。标签可以在创建时附加到对象，随后可以随时添加和修改。 每个对象都可以定义一组键/值标签。每个键对于给定对象必须是唯一的。
+
+**目的：**为了标识和查找方便
+
+### 15.1.2 Label Selector 标签选择器
+
+与[名称和 UID](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/names/) 不同， 标签不支持唯一性。通常，我们希望许多对象携带相同的标签。
+
+通过**标签选择算符**，客户端/用户可以识别一组对象。标签选择算符是 Kubernetes 中的核心分组原语。
+
+API 目前支持两种类型的选择算符：**基于等值的**和**基于集合的**。 标签选择算符可以由逗号分隔的多个**需求**组成。 在多个需求的情况下，必须满足所有要求，因此逗号分隔符充当逻辑**与**（`&&`）运算符。
+
+**目的：**通过在selector中写label，快速匹配所需要的资源如Pod,service,deployment等等
+
+> 等式选择器即自己写的selector表达式在命令行中仅支持`,in,notin,=,==,!=,gt,lt`,其中`==`与`=`是同义词
+
+### 15.1.3 ==Label编辑位置及区别==
+
+在资源yaml配置文件中，标签（label）有两个地方可以存放自定义label
+
++ `metadata.labels[*]`
+
+  标识当前资源的标签。如果资源类型是Pod那就是Pod的标签；如果资源类型是Deployment那就是Deployment的标签；如果资源类型是Service那就是Service的标签等等。
+
++ `spec.metadata.labels[*]`
+
+  标识Pod的标签。一般是资源类型Deployment配置文件中，用于创建Pod时同时指定该Pod的标签。
+
+  > 简单来说：**一个是deployment标签，一个是pod标签**
+
+### 15.1.4 Label和Selector使用
+
++ **yaml配置文件中编写**
+
++ **命令**
+
+  ***标签***
+
+  + `kubectl get 资源 资源名 --show-labels` 查看默认命名空间资源所有标签
+  + `kubectl label 资源 资源名  label键值对` 给默认命名空间资源添加新标签
+  + `kubectl label 资源 -all label键值对` 给默认命名空间所有指定资源类型打上新标签
+  + `kubectl label 资源 资源名 label键值对 --overwrite` 强制修改默认命名空间已存在的标签（没有则添加）
+  + `kubectl label 资源 资源名  label键值对 -l 等式选择器` 在默认命名空间中，给基于等式选择器筛选出来的资源打上新标签
+
+  ```bash
+  #查看pod及标签 --show-labels显示资源（如pod）的所有标签
+  $kubectl get pod -n kube-system -a --show-labels
+  #添加标签
+  $kubectkl label pod nginx-demo target=test -n demo
+  $kubectkl label pod nginx-demo ‘max=’ -n demo #只有键没有值的标签
+  $kubectkl label pod nginx-demo min= -n demo #只有键没有值的标签
+  #修改标签
+  $kubectkl label pod nginx-demo target=test-dev -n demo
+  #基于选择器筛选，添加新标签
+  $kubectkl label pod nginx-demo hash=0x11111 -l target=test-dev -n demo#标签中，选择器中有空格记得加引号
+  
+  #指定pod的版本修改(防止误改)***
+  # --resource-version代表当前pod的资源版本号(该值由k8s维护)
+  # 就是yaml配置文件中的metadata.resourceVersion(该值由k8s维护)
+  # 可以通过 kubectl get pod nginx-demo -n demo -o yaml获取
+  $kubectl label pod nginx-demo -n demo "test=true" --resource-version=278905
+  ```
+
+  ***选择器***
+
+  基本上kubectl的任何命令都可以加上`-l`参数，使用label selector。
+
+  + `kubectl get 资源 -l 等式表达式`
+  + `kubectl describe 资源 -l 等式表达式`
+  + `kubectl label 资源 资源名 label键值对 -l 等式表达式`
+  + `kubectl logs -l 等式选择器`
+  + ...
+
+  ```bash
+  $kubectl get pod -l tyep=app
+  $kubectl get pod -l 'tyep=app'
+  $kubectl get pod -l 'tyep=app,version=v1'
+  $kubectl get pod -l 'version in (v1,v2,v3)'
+  $kubectl get pod -l 'hash=1,max gt 2'
+  $kubectl get pod -l 'min' #如果存在min但是没有值，可以这样写
+  $kubectl get pod -l 'min=' #如果存在min但是没有值，可以这样写
+  ```
+
+  > 等式选择器即自己写的selector表达式仅支持`,in,notin,=,==,!=,gt,lt` ,其中`==`与`=`是同义词
+
+## 15.2 Depolyment
+
+deployment介绍文档： https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/deployment/
+
+deployment配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/deployment-v1/#Deployment
+
+Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）。具有以下作用：
+
++ 自动创建ReplicaSet和Pod
++ 滚动更新、滚动回滚
++ 平滑扩缩容
++ 暂停和恢复deployment
+
+### 15.2.1 创建Deployment
+
+***deployment控制rc/rs来控制pod来控制容器***
+
++ 通过命令行
+
+  ```bash
+  #创建deployment default默认命名空间
+  $kubectl create deployment nginx-deploy --images:192.168.31.79:5000/nginx:latest --replicas=1 -- nginx -g 'daemon off;'
+  # 获取已有deployment的配置文件
+  $kubectl get deployment nginx-deploy -o yaml >nginx-deploy.yaml
+  ```
+
++ 通过配置文件
+
+  ```bash
+  #通过kubectl get deployment xxx -o yaml生成的配置文件
+  apiVersion: apps/v1 #api版本
+  kind: Deployment #资源类型
+  metadata: #元数据
+    annotations: #注释
+      deployment.kubernetes.io/revision: "1" #滚动更新版本号,用于回滚  (k8s自动生成的) 自动生成代表只读
+      kubernetes.io/change-cause: 恢复nginx镜像为latest #更新备注信息 annotate打备注,rollout history查看
+    creationTimestamp: "2024-09-25T07:44:59Z" #deployment创建时间,(k8s自动生成)
+    generation: 1 #表示配置文件生成/修改次数(k8s自动生成的)
+    labels: # **标签(此处定义deployment的标签,可以使用此标签选择该deploy)
+      app: nginx-deploy  #标签键值对
+    name: nginx-deploy #标识deploy的名字
+    namespace: default #表示deploy所在命名空间
+    resourceVersion: "275940" #表示deploy的版本号(k8s自动生成),匹配命令行的--resource-version
+    uid: 7a41e249-69ec-4674-afaf-9d34ebfa4bab #表示该资源的uid值
+  spec: #此deploy规约
+    progressDeadlineSeconds: 600 # 表示deployment没有取得进展最长时间,默认为600(如600s内没有创建新的pod,或者旧pod没有被替换)
+    replicas: 1 #pod副本数
+    revisionHistoryLimit: 10 #表示deploy滚动更新历史记录数(用于回滚操作),默认10,0表示不能回滚
+    selector: #**pod选择器,通过此标签选择ReplicaSet和RS管理的Pod （其实是Pod但是Pod和rs是关联的，所以也影响rs）
+      matchLabels: #基于等式的键值对,还有其他的方式如matchExpressions
+        app: nginx-deploy
+    strategy: # deployment更新策略
+      rollingUpdate: #滚动更新策略
+        maxSurge: 25% #可以使用比例或数字,*表示更新过程中,最多可以额外创建的Pod数量
+        maxUnavailable: 25% #可以使用比例或数字,*表示更新过程中,最大允许不可用Pod的数量
+      type: RollingUpdate #表示使用滚动更新(默认),还有另一个值Recreate
+    template: # *创建Pod的模板
+      metadata: #pod的元数据
+        creationTimestamp: null #pod创建时间,(k8s自动生成)
+        labels: #**pod的label(可以使用该标签筛选此Pod)
+          app: nginx-deploy #标签键值对
+      spec: #pod的规约
+        containers: #容器
+        - command: # 容器启动命令
+          - nginx
+          - -g
+          - daemon off;
+          image: 192.168.31.79:5000/nginx:latest #容器使用的镜像
+          imagePullPolicy: Always #镜像拉取策略
+          name: nginx #容器名字
+          resources: {} #容器资源设置cpu或内存
+          terminationMessagePath: /dev/termination-log #容器终止消息写入本地机器
+          terminationMessagePolicy: File #容器终止消息输出类型
+        dnsPolicy: ClusterFirst #Pod的DNS策略 
+        restartPolicy: Always #pod重启策略,在模板中只能是always
+        schedulerName: default-scheduler #如果写了则使用指定调度器default-scheduler调度pod,否则使用默认调度器(也是它)
+        securityContext: {} #pod的安全上下文
+        terminationGracePeriodSeconds: 30 #pod删除允许额外时间(让你进行销毁处理操作如preStop,到期强制删除)
+  ```
+
+  > + `metadata.labels[]` **这个是定义deploy的标签,由于筛选此deploy**
+  > + `sepc.selector.matchLabels[]` **这是是RS/Pod的标签选择器,用于查找指定的RS/Pod**
+  > + `sepc.template.metadata.labels[]` **这个是定义Pod的标签,用于筛选此Pod**
+  >
+  > 总结：1,3中的labels是定义，**2中selector.matchLabel是运用，用于定位下面template中的Pod即（2中label必等于3中Label）**
+
++ 查看deployment，replicaSet，Pod三者的关系
+
+  **RS关联到Deployment，Pod关联到RS**
+
+  ![image-20240925160937503](./_media/image-20240925160937503.png)
+
+### 15.2.2 滚动更新
+
+#### 15.2.2.1 滚动更新操作
+
+***只有修改deployment配置文件中的template属性后，才会触发滚动更新（但是并不意味着更新别的属性不更新，只是不算滚动更新）***
+
++ 命令直接修改
+
+  ```bash
+  #进入yaml配置,修改nginx镜像为1.7.9 wq保存退出
+  $kubectl edit deploy nginx-deploy
+  
+  
+  # 单个修改(命令特殊)  修改名为nginx-deploy的deploy的镜像
+   # (这也是更新不是回滚,但是deploy使用了原来的rs-1,很微妙,且history序号从1变为3了,不会增加chang记录)
+  $kubectl set image deployment/nginx-deploy nginx=192.168.31.79:5000/nginx:latest
+  #就是kubectl rollout history显示的change-cause
+  $kubectl annotate deployment/nginx-deploy kubernetes.io/change-cause="恢复nginx为latest镜像" #备注更改原因
+  ```
+
+  > 使用`kubectl rollout undo`才是回滚
+
++ 查看滚动更新历史（改了template属性的）
+
+  ```bash
+  #rollout滚动操作只对deployment,StatefulSet,DaemonSet有效
+  $kubectl rollout history deploy nginx-deploy #查看default命名空间名为nginx-deploy的deploy的滚动更新历史（第一次创建也算一次）
+  ```
+
+#### 15.2.2.2 ==滚动更新流程==
+
+```bash
+#可以分三个窗口执行提前监视好
+$kubecttl get deploy nginx-deploy -w #唯一
+$kubectl get replicaset -w #不唯一
+$kubectl get pod -w #不唯一
+```
+
++ 起初一个deploy,一个rs-1,3个pod,3个容器
++ deploy**创建一个新的ReplicaSet**,假如叫rs-2,里面创建一个新pod
++ 新pod中开始拉取nginx镜像,**启动一个nginx容器**
++ 当nginx容器变为**running状态,且容器已准备好接收流量,则将原来的rs-1中的pod关闭一个,转移到rs-2中的pod了**
++ 依次将第二个,第三个pod转移到rs-2中,**至此全部的pod转移到新rs-2中**
++ 原来的rs-1没有任何pod了,至此滚动更新结束
++ **原来的rs-1不删除,用于后面
+
+```bash
+#日志描述
+$kubectl describe deploy nginx-deploy
+Events:
+# nginx-deploy-6cc8f5fcc简称cc(即rs-1)   nginx-deploy-67cb7fb4d6简称d6(即rs-2)
+#刚开始一个deployment 一个rs-1 3个pod  3个容器
+  Type    Reason             Age    From                   Message
+  ----    ------             ----   ----                   -------
+  Normal  ScalingReplicaSet  16m    deployment-controller  Scaled up replica set nginx-deploy-6cc8f5fcc to 3 #(刚开始扩容操作1变成3)默认的rs-cc
+  Normal  ScalingReplicaSet  9m45s  deployment-controller  Scaled up replica set nginx-deploy-67cb7fb4d6 to 1 #新建了rs-d6,并创建一个pod(此时rs-cc还有3个running的pod)
+  Normal  ScalingReplicaSet  8m22s  deployment-controller  Scaled down replica set nginx-deploy-6cc8f5fcc to 2#关闭rs-cc一个pod,缩容到2(第一个pod切换到rs-d6成功)
+  Normal  ScalingReplicaSet  8m22s  deployment-controller  Scaled up replica set nginx-deploy-67cb7fb4d6 to 2#rs-d6,创建第二个pod(此时rs-cc还有2个running的pod)
+  Normal  ScalingReplicaSet  7m1s   deployment-controller  Scaled down replica set nginx-deploy-6cc8f5fcc to 1#关闭rs-cc一个pod,缩容到1(第2个pod切换到rs-d6成功)
+  Normal  ScalingReplicaSet  7m1s   deployment-controller  Scaled up replica set nginx-deploy-67cb7fb4d6 to 3#rs-d6,创建第三个pod(此时rs-cc还有1个running的pod)
+  Normal  ScalingReplicaSet  5m56s  deployment-controller  Scaled down replica set nginx-deploy-6cc8f5fcc to 0#关闭rs-cc一个pod,缩容到0(第3个pod切换到rs-d6成功) 
+  # 迁移操作结束
+
+```
+
+> 滚动更新并行注意事项:
+>
+> + 修改了一次配置,此时deploy正在进行更新操作1中
+> + 此时你又进行修改进行更新操作2,在没更新完成的基础上修改,引起了并行更新(**一个更新未完又出现另一个更新**)
+> + 此时尽管更新操作1已经运行了一半,deploy会把更新操作1中的启动pod干掉(k8s认为这个中间更新操作是无意义的),直接应用最新依次更改
+>
+> 总结:**并行更新中,deploy只会保留最后一次(最新一次)的配置,中间其他配置都将被丢弃(中间pod被杀)**
+
+### 15.2.3 回滚Deployment
+
+```bash
+#1.模拟更新错误
+$kubectl set resources deployment nginx-deploy --limit=cpu=200m,memory=200Mi --requests=cpu=100m,memory=100Mi
+#更新annotation
+$kubectl annotate deploy nginx-deploy kubernetes.io/change-cause="deploy内pod设置资源限制"
+#2.查看滚动更新历史记录(默认保存10个 revisionHistoryLimit)
+$kubectl rollout history deploy nginx-deploy
+#3.回顾操作
+$kubectl rollout undo deploy nginx-demo #撤销上一次更新操作,即回滚到 --to-revision=0(默认)上一个版本
+$kubectl rollout undo deploy nginx-demo --to-revision 3 #回滚到revision=3的版本(rollout history查询得到的)
+```
+
+### 15.2.4 扩容和缩容
+
+deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.replicas`的值，没有修改`sepc.template`所以**不会增加更新记录（不算滚动更新）**
+
+#### 15.2.4.1 手动扩容和缩容
+
+1. 通过编辑配置文件的方式
+
+   ```bash
+   #方法1 进入实时编辑，修改配置文件sepc.replicas
+   $kubectl edit deploy nginx-deploy 
+   #方法2 修改本地的配置文件
+   $kubectl apply -f nginx-deploy.yaml
+   ```
+
+2. 通过命令方式
+
+   ```bash
+   $kubectl scale deploy nginx-deploy --replicas=2 --timeout 30m #这条命令最多等待30分钟的时间,如果超过该命令报错.但是不影响实际的结果(超时不会回滚)
+   $kubectl scale deploy nginx-deploy --replicas=5 --resource-version=302606 #metadata.resourceVersion
+   ```
+
+#### 15.42.4.2 自动扩容和缩容
+
++ 基于cpu 
+
+  **当cpu达到一定比例就会在预先定义好的范围内增加pod副本.如果cpu下降了,就主键减少副本(注意理解)**
+
+  ```bash
+  #当cpu占用达到70时,deploy会增加负载(pod副本数量会在1-10之间自动调整),当负载下降就会自动减少
+  $kuebctl autosacle deploy nginx-deploy --min=1 --max=10 --cpu-percent=70 
+  
+  #查看自己新加的HPA高可用Pod自动扩容器
+  $kubectl get hpa xxx -n xxx
+  ```
+
++ 基于自定义指标
+
+  如内存,访问量等，需要安装查插件如：Prometheus
+
+  + 配置安装 **Prometheus Adapter**，用于收集和提供自定义指标
+
+  + 在HPA中引用自定义指标
+
+    ```yaml
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: custom-hpa
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: my-deployment
+      minReplicas: 2
+      maxReplicas: 10
+      metrics:
+      - type: Pods
+        pods:
+          metric:
+            name: custom_requests_per_second  # 自定义指标名称
+          target:
+            type: AverageValue
+            averageValue: "100"
+    ```
+
+  + 启用metrics-server
+
+    为了能够基于 CPU 和内存扩缩容，你需要在集群中启用 **`metrics-server`**，这是 Kubernetes 用来收集资源使用率的组件。
+
+    ```bash
+    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+    ```
+
+### 15.2.5 暂停和恢复deployment
+
+当需要频繁修改`spec.template`时，就导致deploy持续频繁更新。我们希望统一改完后再更新，这是就可以暂停deploy等待彻底完成更新后再开启。(**此时容器内服务还是可以访问的**)
+
++ 暂停deploy
+
+  ```bash
+  # 暂停deploy更新
+  $kubectl rollout pause deploy nginx-deploy
+  # 查看更新状态
+  $kubectl rollout status deploy nginx-deploy #卡在Waiting for deployment "nginx-deploy" rollout to finish: 0 out of 2 new replicas have been updated...
+  $kubectl get rs -l xxxx #也可以查看没有新增rs
+  $kubectl rollout history deploy nginx-deploy --revision=7#查看最新的更新记录还是7
+  
+  #这个显示是最新的,修改后的配置文件
+  $kubectl get deploy nginx-deploy -o yaml
+  $kubectl describe deploy nginx-deploy
+  ```
+
++ 恢复deploy
+
+  ```bash
+  #恢复
+  $kubeclt rollout resume deploy nginx-deploy #回车马上进行更新
+  #多了一个rs 滚动更新历史
+  ```
+
+## 15.3 StatefulSet
+
+
+
+## 15.4 DaemonSet
