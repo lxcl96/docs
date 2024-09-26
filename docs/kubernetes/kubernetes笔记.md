@@ -456,12 +456,11 @@ Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还�
 
 `StatefulSet`中每个Pod的DNS格式为`statefulSetName-{0...N-1}.serviceName.namespace.svc.cluster.local`，则可以通过该域名实现Pod的互相通信。
 
-+ `statefulSetName`为`StatefulSet`的名字
-+ `0...N-1`为Pod所在的序号，从0到N-1
-+ `serviceName`为`Headless Service`的名字
-+ `namespace`为服务所在的命名空间名，`Headless Service`和`StatefulSet`必须在同一命名空间`namespace`
-+ `svc` 固定值
-+ `.cluster.local`为cluster domain集群域名
++ `statefulSetName`为`StatefulSet`的名字(必须有)
++ `0...N-1`为Pod所在的序号，从0到N-1(必须有) (**1，2组合起来就是Pod的名字**)
++ `serviceName`为`Headless Service`的名字(必须有)
++ `namespace`为服务所在的命名空间名，`Headless Service`和`StatefulSet`必须在同一命名空间`namespace` (可以不写认为是deafult)
++ `svc.cluster.local` 固定值，表示为k8s内部DNS服务
 
 ***主要特点：***
 
@@ -472,7 +471,7 @@ Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还�
 
 ***组成：***
 
-+ `Headless Service `  用于定义网络标志（DNS domain）即DNS服务
++ `Headless Service `  用于定义网络标志（DNS domain）即DNS服务。**通过服务名->域名->ip**
 + `VolumeClaimTemplate`   PVC，用于持久化数据存储的声明模板
 
 ***注意事项：***
@@ -1829,7 +1828,7 @@ API 目前支持两种类型的选择算符：**基于等值的**和**基于集�
 
   标识当前资源的标签。如果资源类型是Pod那就是Pod的标签；如果资源类型是Deployment那就是Deployment的标签；如果资源类型是Service那就是Service的标签等等。
 
-+ `spec.metadata.labels[*]`
++ `spec.template.metadata.labels[*]`
 
   标识Pod的标签。一般是资源类型Deployment配置文件中，用于创建Pod时同时指定该Pod的标签。
 
@@ -1975,6 +1974,8 @@ Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）
   > + `sepc.template.metadata.labels[]` **这个是定义Pod的标签,用于筛选此Pod**
   >
   > 总结：1,3中的labels是定义，**2中selector.matchLabel是运用，用于定位下面template中的Pod即（2中label必等于3中Label）**
+  >
+  > 简单记法：**selector就是用来找Pod的，里面是条件**
 
 + 查看deployment，replicaSet，Pod三者的关系
 
@@ -1997,7 +1998,7 @@ Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）
   
   # 单个修改(命令特殊)  修改名为nginx-deploy的deploy的镜像
    # (这也是更新不是回滚,但是deploy使用了原来的rs-1,很微妙,且history序号从1变为3了,不会增加chang记录)
-  $kubectl set image deployment/nginx-deploy nginx=192.168.31.79:5000/nginx:latest
+  $kubectl set image deployment/nginx-deploy nginx=192.168.31.79:5000/nginx:latest#容器名=镜像:tag
   #就是kubectl rollout history显示的change-cause
   $kubectl annotate deployment/nginx-deploy kubernetes.io/change-cause="恢复nginx为latest镜像" #备注更改原因
   ```
@@ -2011,7 +2012,7 @@ Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）
   $kubectl rollout history deploy nginx-deploy #查看default命名空间名为nginx-deploy的deploy的滚动更新历史（第一次创建也算一次）
   ```
 
-#### 15.2.2.2 ==滚动更新流程==
+#### 15.2.2.2 ==滚动更新流程（记得看看更新策略）==
 
 ```bash
 #可以分三个窗口执行提前监视好
@@ -2021,12 +2022,12 @@ $kubectl get pod -w #不唯一
 ```
 
 + 起初一个deploy,一个rs-1,3个pod,3个容器
-+ deploy**创建一个新的ReplicaSet**,假如叫rs-2,里面创建一个新pod
++ `kubectl edit`修改配置文件,deploy**创建一个新的ReplicaSet**,假如叫rs-2,里面创建一个新pod
 + 新pod中开始拉取nginx镜像,**启动一个nginx容器**
 + 当nginx容器变为**running状态,且容器已准备好接收流量,则将原来的rs-1中的pod关闭一个,转移到rs-2中的pod了**
-+ 依次将第二个,第三个pod转移到rs-2中,**至此全部的pod转移到新rs-2中**
++ 依次将第二个Pod,第三个pod转移到rs-2中,**至此全部的pod转移到新rs-2中**
 + 原来的rs-1没有任何pod了,至此滚动更新结束
-+ **原来的rs-1不删除,用于后面
++ 原来的rs-1不删除,用于后面回滚
 
 ```bash
 #日志描述
@@ -2054,6 +2055,10 @@ Events:
 > + 此时尽管更新操作1已经运行了一半,deploy会把更新操作1中的启动pod干掉(k8s认为这个中间更新操作是无意义的),直接应用最新依次更改
 >
 > 总结:**并行更新中,deploy只会保留最后一次(最新一次)的配置,中间其他配置都将被丢弃(中间pod被杀)**
+
+#### 15.3.3.2 滚动更新策略
+
+看配置文件 [15.2.1](###15.2.1)
 
 ### 15.2.3 回滚Deployment
 
@@ -2098,7 +2103,7 @@ deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.
   **当cpu达到一定比例就会在预先定义好的范围内增加pod副本.如果cpu下降了,就主键减少副本(注意理解)**
 
   ```bash
-  #当cpu占用达到70时,deploy会增加负载(pod副本数量会在1-10之间自动调整),当负载下降就会自动减少
+  #当所有Pod节点的平均cpu占用达到70时,deploy会增加负载(pod副本数量会在1-10之间自动调整),当负载下降就会自动减少
   $kuebctl autosacle deploy nginx-deploy --min=1 --max=10 --cpu-percent=70 
   
   #查看自己新加的HPA高可用Pod自动扩容器
@@ -2143,7 +2148,7 @@ deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.
     kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
     ```
 
-### 15.2.5 暂停和恢复deployment
+### 15.2.5 暂停和恢复deployment（唯一支持）
 
 当需要频繁修改`spec.template`时，就导致deploy持续频繁更新。我们希望统一改完后再更新，这是就可以暂停deploy等待彻底完成更新后再开启。(**此时容器内服务还是可以访问的**)
 
@@ -2172,6 +2177,325 @@ deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.
 
 ## 15.3 StatefulSet
 
+statefulSet介绍文档：https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/statefulset/
 
+statefulSet配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/stateful-set-v1/
+
+StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 集合的部署和扩缩， 并为这些 Pod 提供持久存储和持久标识符。
+
+和 [Deployment](https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/deployment/) 类似， StatefulSet 管理基于相同容器规约的一组 Pod。但和 Deployment 不同的是， **StatefulSet 为它们的每个 Pod 维护了一个有粘性的 ID**。这些 Pod 是基于相同的规约来创建的， 但是**不能相互替换**：无论怎么调度，**每个 Pod 都有一个永久不变的 ID**。其主要作用如下：
+
++ 稳定的、唯一的网络标识符
++ 稳定的、持久的存储
++ 有序的、优雅的部署和更新
++ 有序的、自动的滚动更新
+
+> “稳定的”意味着 Pod 调度或重调度的整个过程是有持久性的。 如果应用程序不需要任何稳定的标识符或有序的部署、删除或扩缩， 则应该使用由一组无状态的副本控制器提供的工作负载来部署应用程序
+
+### 15.3.1 创建StatefulSet(只能通过配置文件)
+
+只能通过配置文件创建StatefulSet 
+
++ 定义`nginx-statefulset.yaml`文件
+
+  ```yaml
+  --- # yaml中 ---表示文档的开始,表示多组yaml配置但是在一个配置文件中(用于同时配置相关联的依赖服务)
+  apiVersion: v1
+  kind: Service #定义一个资源类型为Service,用于管理DNS
+  metadata:
+    name: nginx-svc # 服务名为nginx
+    labels: # 该service的标签,用于被筛选
+      app: nginx
+  spec:
+    ports: #service公开暴露的端口为80,给该端口命名为web
+    - port: 80
+      name: web #80端口对外的暴露名
+    #clusterIP: None 表示基于服务名进行访问,并没绑定具体ip
+    clusterIP: None #clusterIP 为 “None” 时会生成“无头服务即Headless Service(此时没有负载均衡)
+    selector: #表示service使用此selector查找匹配的Pod,即路由到指定label的pod上
+      # service的特殊写法(没有MatchLabels等对象,而是直接的Map)
+      app: nginx 
+    type: ClusterIP #service公开方式,默认为ClusterIP为端点分配一个集群内部 IP 地址用于负载均衡,如果 clusterIP 为 None，则不分配虚拟 IP
+  ---   # yaml中 ---表示文档的开始,表示多组yaml配置但是在一个配置文件中(用于同时配置相关联的依赖服务)
+  apiVersion: apps/v1
+  kind: StatefulSet #定义一个资源,类型为StatefulSet
+  metadata:
+    name: nginx-sts #定义statefuset的名字
+  spec: #规约
+    selector: #表示statefulset通过该selector(app=nginx)查找满足的pod
+      matchLabels:
+        app: nginx # 必须匹配 .spec.template.metadata.labels
+    serviceName: "nginx-svc" # 表示管理此sts的service服务,必须在sts前创建
+    replicas: 2 #pod副本数
+    minReadySeconds: 10 # pod准备就绪最少10秒后才认为是可用的
+    template: #podTemplate模板
+      metadata:
+        labels: #定义pod label
+          app: nginx # 必须匹配 .spec.selector.matchLabels
+      spec: #pod的规约
+        terminationGracePeriodSeconds: 10 #停止pod后,可以继续运行10秒(不马上终端服务),超过10s立即终止
+        containers:
+        - name: nginx-c
+          image: 192.168.31.79:5000/nginx:latest
+          ports: #容器公开的端口(和service公开端口相互绑定)
+          - containerPort: 80 #通过calico创建的网卡tunl0,公开该网卡地址上的80端口(只能在集群内部使用,但是你定义了service所以可以在外部使用)
+            name: nginx-c-port #该容器端口名不能超过16个字符
+          volumeMounts: #该容器使用的挂载卷www
+          - name: www #名字为www的挂在卷
+            mountPath: /usr/share/nginx/html #挂载到该容器中的位置
+      updateStrategy: #sts更新策略
+        rollingUpdate: #滚动更新策略
+          partition: 0 #表示从第几个序号开始更新 如果为3表示只更新序号大于等于3的
+        type: RollingUpdate #更新策略使用滚动更新
+            
+            
+   #$$$$$$$$$$$$$$$$$###存储没学到先去掉 不加，因为还要定义PV否则会失败的
+    volumeClaimTemplates: # pvc持久化卷定义
+    # k8s不直接管理存储为,通过storageClass存储类和volumeClaimTemplates(PVC)抽象管理不同的存储类型(如本地,云端等等)
+    # 对于storageClassName 如果是本地存储数据默认存放在该Node节点的/var/lib/kubelet/pods/<pod-id>/volumes/
+    - metadata:
+        name: www #该持久化卷名字
+      spec: #数据卷
+        accessModes: [ "ReadWriteOnce" ] # 该卷的读写策略:同一Node节点上运行的多个Pod可以访问该卷
+        storageClassName: "my-storage-class" #存储类名
+        resources: #存储卷定义的资源
+          requests: #最小要求1GB大小空间
+            storage: 250Mi
+  ```
+
++ 执行命令创建`StatefulSet(sts)`,`Headless Service(svc)`,`Pod`等（`PersistentVolumeClaim(PVC)`去掉了，不考虑）
+
+  ```bash
+  $kubectl create -f nginx-statefulset.yaml
+  ```
+
++ 查看
+
+  ```bash
+  #都是默认命名空间的资源
+  kubectl get sts,svc,pod -o wide #查看statefulset,service,pod的状态 成功运行
+  ```
+
++ 验证
+
+  + Master，Node节点`curl Pod的ip` 成功（注意不是Node的IP地址）
+
+  + 进入容器内部,验证容器间访问通过
+
+    ```bash
+    #以pod nginx-sts-0举例
+    kubectl exec -it nginx-sts-0 -c nginx-c -- curl 另一个Pod的地址 #成功
+    kubectl exec -it nginx-sts-0 -c cat /etc/hosts #查看自定义域名
+    ...
+    10.244.169.161	nginx-sts-0.nginx-svc.default.svc.cluster.local	nginx-sts-0#当前容器的自定义域名
+    kubectl exec -it nginx-sts-0 -c curl nginx-sts-1.nginx-svc #使用自定义域名访问另一个容器服务,成功
+    #另一个同理访问,均可以
+    ```
+
+  + 构建新镜像busybox:1.28.4,验证
+
+    ```bash
+    $kubectl run test-busybox --image=busybox:1.28.4 --restart=Never #构建pod
+    $kubectl exec -it test-busybox -c test-busybox -- /bin/sh #pod内镜名字可以通过get pod -o yaml获取
+        $nslookup nginx-sys-1.nginx-svc.default.svc.cluster.local #域名查询
+        Server:    10.96.0.10
+        Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local #先去k8s dns服务器上查找，获取到ip
+    
+        Name:      nginx-sts-1.nginx-svc
+        Address 1: 10.244.36.87 nginx-sts-1.nginx-svc.default.svc.cluster.local
+    ```
+
+> ***详解网络与Service：***
+>
+> + Node节点上有多个网卡，所以容器默认暴露的端口我们可以通过calico创建的网卡地址访问（不是实际的网卡ens33）
+> + 不暴露容器内服务端口（nginx：80），则该服务只能进入容器自身内访问或在其他容器内通过ip:port访问，在外边Master节点、Node节点都无法访问（通过ip或自定义域名）。
+> + 在容器内向外暴露80端口，此时在Master节点，Node节点你可以通过ip:port访问（自定义域名还是不行）。
+> + 在容器内向外暴露80端口，构建**无头服务即Headless Service**没有绑定具体ip地址，k8s会在创建的每个容器内基于一定规则**修改hosts，在其中维护当前容器的IP地址，和对应的自定义域名**，在此种情况下，容器间（容器内部）就可以通过这个hosts中自定义域名相互通信，即根据**服务名通信**，此时Master节点，Node节点还是只能通过ip:port访问，无法使用自定义服务名（域名）。**简单说就是k8s维护自定义域名，客户端发起DNS查询，k8s解析DNS然后返回Pod的ip地址，客户端选择一个ip地址进行连接，实现客户端与Pod直接通信（而不是经过k8s代理转发到Pod上），所以此时不支持负载均衡和服务发现。现在是Pod的直接发现**
+> + 在容器内向外暴露80端口，构建**Service，绑定了ip地址**，可以实现负载均衡和服务发现
+
+### 15.3.2 扩容和缩容
+
+和deployment的自动扩容缩容方法一样
+
+> 扩容中Pod按照序号从0,1,2,..一个一个扩容（一个Pod起好了才去启下一个），同样缩容也就是按照5,4,3,..一个一个缩容（一个Pod关闭了才去关闭下一个）
+
+#### 15.3.2.1 手动扩容缩容
+
++ 手动编辑处理 `kubectl edit sts nginx-sts`
+
++ 命令直接处理
+
+  ```bash
+  # --current-replicas=2表示当前副本数是2的才扩容，否则不扩容
+  kubectl scale sts nginx-sts 其他的sts.. --replicas=5 --current-replicas=2 #将statefulset中pod扩容到5 可以同时扩容缩容多个（同类型）
+  # 通过patch更新资源
+  kubectl patch sts nginx-sts -p '{"spec":{"replicas":4}}' # 通过json字符串(也可以用--patch-file指定文件)来更新配置
+  kubectl patch sts nginx-sts -p $'spec:\n replicas:\n  2' #通过yaml字符串(也可以用--patch-file指定文件)来更新配置
+  ```
+
+#### 15.3.2.2 自动扩容缩容
+
++ 基于cpu
+
+  ```bash
+  #当所有pod节点的平均cpu占用达到70就开始扩容，当占用下降就开始缩容（1-5之间）
+  kubectl autoscale sts nginx-sts --min=1 --max=5 --cpu-percent=70
+  #查看自动扩容计划
+  kubectl get hpa 
+  ```
+
++ 基于其他，请安装插件如Prometheus Adapter
+
+  具体请看deployment
+
+### 15.3.3 滚动更新
+
+#### 15.3.3.1 默认策略的滚动更新
+
+StatefulSet滚动更新比较特殊，他不是和Deployment一样新启用一个RS等待新Pod启动完成再去关闭之前的一个Pod。由于StatefulSet直接管理Pod，而不是通过RS，所以他的滚动更新策略就是**从序号最大的Pod（如5）开始关闭，然后在Pod-5中开始更新（terminating->pending->containercreating->running），等这个Pod5更新完成了（ready），开始逐次更新Pod-4，Pod-3，...**
+
++ 命令更新镜像
+
+  ```bash
+  # 1.直接edit
+  kubectl edit sts nginx-sts #进入编辑保存
+  # 2.直接set
+  kubectl set image sts nginx-sts nginx-c=192.168.31.79:5000/nginx:latest # nginx-c为 容器名
+  # 3.使用patch（json，yaml）
+  kubectl patch sts nginx -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx-c","image":"192.168.31.79:5000/nginx:latest"}]}}}}'
+  # json的另一种方法
+  kubectl patch sts nginx-sts --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value":"192.168.31.79:5000/nginx:1.7.9"}]'
+  # 4.如果创建是使用yaml(create 或apply)
+  kubectl apply -f nginx-statefulset.yaml# 如果create创建的推荐加上--save-config，否则会报警告
+  ```
+
+  > 更新完记得**立马**添加注释`kubectl annotate sts nginx-sys kubernetes.io/change-cause=测试sts更新`
+
++ 查看更新历史
+
+  ```bash
+  kubectl rollout history sts nginx-sts #查看所有的更新历史
+  ```
+
+#### 15.3.3.2 滚动更新策略
+
++ `RollingUpdate`
+
+  ***注意体会与Deployment滚动更新的异同点***
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: nginx-sts
+  spec: 
+    selector: 
+      matchLabels:
+        app: nginx 
+    serviceName: "nginx-svc" 
+    replicas: 2 
+    minReadySeconds: 10 # pod准备就绪最少10秒后才认为是可用的
+    template:
+      metadata:
+        labels: 
+          app: nginx 
+      spec: 
+        terminationGracePeriodSeconds: 10 
+        containers:
+        - name: nginx-c
+          image: 192.168.31.79:5000/nginx:latest
+          ports: 
+          - containerPort: 80 
+            name: nginx-c-port 
+    updateStrategy: #sts更新策略
+      rollingUpdate: #滚动更新策略
+        partition: 2 #表示从第几个序号开始更新 即2表示只更新序号大于等于2的（金丝雀部署）
+        # 新版本才有这个配置
+        # 最大不可用=maxUavailable（为数字）
+        # 最大不可用=maxUavailable*replicas（为比例，四舍五入）
+        maxUavailable: 25% #表示更新过程中，最大不可用pod数量（可为百分比或数字） 
+    type: RollingUpdate #更新策略使用滚动更新（默认）
+    revisionHistoryLimit: 10 #记住最近更新历史版本个数默认是10	
+  ```
+
+  > 可以使用`kubectl describe pod nginx-sts-0/1/2/3/4`一次查看镜像(或其他修改的地方) (***就算将0/1的Pod删除自动新建的Pod也是原来的,因为配置文件没有改***)
+
++ `Ondelete`
+
+  ***等Pod被删除后,新创建的Pod才使用新配置(删除后才生效)***
+
+  ```bash
+  apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: nginx-sts
+  spec: 
+    selector: 
+      matchLabels:
+        app: nginx 
+    serviceName: "nginx-svc" 
+    replicas: 2 
+    minReadySeconds: 10 # pod准备就绪最少10秒后才认为是可用的
+    template:
+      metadata:
+        labels: 
+          app: nginx 
+      spec: 
+        terminationGracePeriodSeconds: 10 
+        containers:
+        - name: nginx-c
+          image: 192.168.31.79:5000/nginx:latest
+          ports: 
+          - containerPort: 80 
+            name: nginx-c-port 
+    type: OnDelete #仅在Pod被删除后,才会使用新配置新建Pod
+    revisionHistoryLimit: 10 #记住最近更新历史版本个数默认是10	
+  ```
+
+#### 15.3.3.3 灰度发布（金丝雀发布）
+
+> 基于**RollingUpdate**策略
+
+利用滚动更新中的`partition`属性，可以实现简易的灰度发布的效果。例如我们有5个Pod，如果当前`Partition`**设置为3**，那么此时滚动更新时，**只会更新那些序号大于等于3的**。利用该机制，我们可以通过控制`partition`的值，来决定只更新其中的一部分Pod，确认没有问题后再逐渐增加更新的Pod数量，最终实现全部Pod更新。
+
+### 15.3.4 更新回滚
+
+和deployment的命令完全一样
+
+```bash
+kubectl rollout history sts nginx-sts
+kubectl rollout undo sts nginx-sts --to-revision=3 #
+```
+
+> 如果一些问题通过回滚发现还是无法解决如：镜像仓库地址写错了导致一直卡在`ImagePullBackOff`，查看实时配置文件已经更新，但是实际`describe`还是卡住了，那么**可以先删掉这个Pod，sts会自动以新配置创建新副本**
+
+### 15.3.5 删除StatefulSet
+
+***默认删除StatefulSet使用级联删除将所有的Pod全部删除***
+
++ **级联删除**  删除StatefulSet的时候同时**删除旗下所有除Pod**
+
+  + `--cascade=backgroud`(**默认**)  立即删除主资源(如deployment和statefulset)，子资源在后台异步删除。
+  + `--cascade=foreground`  子资源删除完成后，才删除主资源。
+
+  > 区别在于: 主资源先删除，还是子资源先删除（最后都会被删除）
+
++ **非级联删除**  删除StatefulSet的时候**不删除旗下所有Pod**
+
+  + `--cascade=orphan`  只删除主资源，保留所有子资源不受影响(*新版本用法*)
+  + `--cascade=false` 只删除主资源，保留所有子资源不受影响(*老版本用法*)
+
+```bash
+# 其他服务为Service,PersistentVolumeClaim,HorizontalPodAutoscaler按需删除
+kubectl delete sts nginx-sts --cascade=false #非级联删除 老版本方法 推荐使用--orphan
+kubectl delete sts nginx-sts #默认级联后台删除，等同于--cascade=background
+kubectl delete sts nginx-sts --cascade=foreground #前台级联删除，先删除子资源，等子资源删除完了再删除主资源
+```
 
 ## 15.4 DaemonSet
+
+场景：集群中有多个机器节点，每个Node节点负责的模块不一样比如（订单，仓储，物流等等），如果需要将这个业务流程的日志进行采集则需要我们自己手动去每个Node机器上新建一个Pod用于日志采集，不太方便。而DaemonSet就是为了解决这个情况。
+
+**DaemonSet** 确保全部（或者某些）节点上运行一个 Pod 的副本。 当有节点加入集群时， 也会为他们新增一个 Pod 。 当有节点从集群移除时，这些 Pod 也会被回收。删除 DaemonSet 将会删除它创建的所有 Pod。
+
+## 15.5 HorizontalPodAutoscaler(HPA)
