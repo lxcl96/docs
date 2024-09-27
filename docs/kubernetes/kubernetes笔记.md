@@ -1891,16 +1891,17 @@ API 目前支持两种类型的选择算符：**基于等值的**和**基于集�
 
 ## 15.2 Depolyment
 
-deployment介绍文档： https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/deployment/
-
-deployment配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/deployment-v1/#Deployment
-
 Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）。具有以下作用：
 
 + 自动创建ReplicaSet和Pod
 + 滚动更新、滚动回滚
 + 平滑扩缩容
 + 暂停和恢复deployment
+
+### 15.2.0 api文档
+
++ deployment介绍文档： https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/deployment/
++ deployment配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/deployment-v1/#Deployment
 
 ### 15.2.1 创建Deployment
 
@@ -2096,57 +2097,9 @@ deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.
    $kubectl scale deploy nginx-deploy --replicas=5 --resource-version=302606 #metadata.resourceVersion
    ```
 
-#### 15.42.4.2 自动扩容和缩容
+#### 15.2.4.2 自动扩容和缩容
 
-+ 基于cpu 
-
-  **当cpu达到一定比例就会在预先定义好的范围内增加pod副本.如果cpu下降了,就主键减少副本(注意理解)**
-
-  ```bash
-  #当所有Pod节点的平均cpu占用达到70时,deploy会增加负载(pod副本数量会在1-10之间自动调整),当负载下降就会自动减少
-  $kuebctl autosacle deploy nginx-deploy --min=1 --max=10 --cpu-percent=70 
-  
-  #查看自己新加的HPA高可用Pod自动扩容器
-  $kubectl get hpa xxx -n xxx
-  ```
-
-+ 基于自定义指标
-
-  如内存,访问量等，需要安装查插件如：Prometheus
-
-  + 配置安装 **Prometheus Adapter**，用于收集和提供自定义指标
-
-  + 在HPA中引用自定义指标
-
-    ```yaml
-    apiVersion: autoscaling/v2
-    kind: HorizontalPodAutoscaler
-    metadata:
-      name: custom-hpa
-    spec:
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: my-deployment
-      minReplicas: 2
-      maxReplicas: 10
-      metrics:
-      - type: Pods
-        pods:
-          metric:
-            name: custom_requests_per_second  # 自定义指标名称
-          target:
-            type: AverageValue
-            averageValue: "100"
-    ```
-
-  + 启用metrics-server
-
-    为了能够基于 CPU 和内存扩缩容，你需要在集群中启用 **`metrics-server`**，这是 Kubernetes 用来收集资源使用率的组件。
-
-    ```bash
-    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-    ```
+见 [15.5 HPA章节](#15.5 HorizontalPodAutoscaler(HPA))
 
 ### 15.2.5 暂停和恢复deployment（唯一支持）
 
@@ -2175,11 +2128,17 @@ deployment借助ReplicaSet将Pod进行扩容和缩容。因为修改的是`spec.
   #多了一个rs 滚动更新历史
   ```
 
+### 15.2.6 删除deployment
+
++ `--cscade=backgroud` 默认 ，后台级联删除。（先删除deploy，再删除pod）
++ `--cscade=foreground` 前台级联删除。（先删除pod，再删除deploy）
++ `--cscade=orphan` 不进行级联删除（只删除deploy，不删除pod）
+
+```bash
+kucetl delete deploy nginx-deploy --cscade=orphan
+```
+
 ## 15.3 StatefulSet
-
-statefulSet介绍文档：https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/statefulset/
-
-statefulSet配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/stateful-set-v1/
 
 StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 集合的部署和扩缩， 并为这些 Pod 提供持久存储和持久标识符。
 
@@ -2191,6 +2150,11 @@ StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-
 + 有序的、自动的滚动更新
 
 > “稳定的”意味着 Pod 调度或重调度的整个过程是有持久性的。 如果应用程序不需要任何稳定的标识符或有序的部署、删除或扩缩， 则应该使用由一组无状态的副本控制器提供的工作负载来部署应用程序
+
+### 15.3.0 api文档
+
++ statefulSet介绍文档：https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/statefulset/
++ statefulSet配置文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/stateful-set-v1/
 
 ### 15.3.1 创建StatefulSet(只能通过配置文件)
 
@@ -2335,18 +2299,7 @@ StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-
 
 #### 15.3.2.2 自动扩容缩容
 
-+ 基于cpu
-
-  ```bash
-  #当所有pod节点的平均cpu占用达到70就开始扩容，当占用下降就开始缩容（1-5之间）
-  kubectl autoscale sts nginx-sts --min=1 --max=5 --cpu-percent=70
-  #查看自动扩容计划
-  kubectl get hpa 
-  ```
-
-+ 基于其他，请安装插件如Prometheus Adapter
-
-  具体请看deployment
+见 [15.5 HPA章节](#15.5 HorizontalPodAutoscaler(HPA))
 
 ### 15.3.3 滚动更新
 
@@ -2460,11 +2413,11 @@ StatefulSet滚动更新比较特殊，他不是和Deployment一样新启用一�
 
 ### 15.3.4 更新回滚
 
-和deployment的命令完全一样
+和deployment的命令完全一样，注意`spec.revisionHistoryLimit`不能为0
 
 ```bash
-kubectl rollout history sts nginx-sts
-kubectl rollout undo sts nginx-sts --to-revision=3 #
+kubectl rollout history sts nginx-sts #查看更新记录
+kubectl rollout undo sts nginx-sts --to-revision=3 #将更新回滚到序号为3的版本
 ```
 
 > 如果一些问题通过回滚发现还是无法解决如：镜像仓库地址写错了导致一直卡在`ImagePullBackOff`，查看实时配置文件已经更新，但是实际`describe`还是卡住了，那么**可以先删掉这个Pod，sts会自动以新配置创建新副本**
@@ -2498,4 +2451,309 @@ kubectl delete sts nginx-sts --cascade=foreground #前台级联删除，先删�
 
 **DaemonSet** 确保全部（或者某些）节点上运行一个 Pod 的副本。 当有节点加入集群时， 也会为他们新增一个 Pod 。 当有节点从集群移除时，这些 Pod 也会被回收。删除 DaemonSet 将会删除它创建的所有 Pod。
 
+> 一旦手动给没有指定label（要满足nodeSelector）的Node节点添加指定label，那么DaemonSet会自动将pod添加到新Node上（自动启用该pod）；同样，如果删除nodeSelector中的指定标签，DaemonSet会自动删除该指定的标签的机器（前提没有其他满足的标签）。
+>
+> 总结：**DaemonSet会动态监听Node机器的label并根据nodeSelector规则实时调整Node机器上的（增/删）Pod**
+
+### 15.4.0 api文档
+
++ 介绍文档： https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/daemonset/
++ api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/daemon-set-v1/
+
+### 15.4.1 创建DaemonSet(配置文件)
+
++ 定义配置文件`fluentd-daemonset.yaml`(**不加nodeSelector配置**)
+
+  ```yaml
+  apiVersion: apps/v1 # api版本(有些特殊了加个apps/)
+  kind: DaemonSet #定义的资源类型为DaemonSet
+  metadata: #该ds的元数据
+    name: fluentd-daemonset #该ds的名字
+    namespace: kube-system #该ds的命名空间
+    labels: #该ds的标签(用于定位该ds)
+      k8s-app: fluentd-logging
+  spec: # 该ds的规约
+    selector: #用于定位Pod的选择器,必须和下面template.metadata.labels中的匹配
+      matchLabels: #使用matchlabels查找
+        app: logging
+        id: fluentd
+    template: #podTemplate
+      metadata: #pod的元数据
+        labels: #指定pod的label,用于定位通过模板生成的pod
+          app: logging
+          id: fluentd
+        name: fluentd-daemonset # pod的名字
+      spec: #pod的规约
+        #用于节点调度的:节点选择器nodeSelector,容忍tolerations,亲和力affinity,优先级priority等等见高级篇配置
+        #nodeSelector: #和Node节点的label绑定
+        containers:
+        - name: fluentd-c
+          image: 192.168.31.79:5000/agilestacks/fluentd-elasticsearch:v1.3.0
+          volumeMounts: #使用挂载卷
+          - name: varlog #使用名字叫 varlog 的挂载卷
+            mountPath: /var/log #挂载到容器中的 /var/log
+          - name: containers
+            mountPath: /var/lib/docker/containers
+        terminationGracePeriodSeconds: 30 #优雅终止(缓冲30秒)
+        volumes: #定义挂载卷组
+        #定义挂载卷1
+        - name: varlog #挂载卷1的名字
+          hostPath: #定义挂载卷1的类型为hostPath
+            path: /var/log #映射Node节点的挂载卷(主机路径,给容器挂载的物理机地址)
+        #定义挂载卷2
+        - name: containers
+          hostPath:
+            path: /var/lib/docker/containers
+    minReadySeconds: 0 #pod就绪0秒后立即可用
+    updateStrategy: #更新策略 (默认使用RollingUpdate)
+      type: RollingUpdate # 采用滚动更新(还有一个选项是OnDelete)
+      rollingUpdate: #选用滚动更新后,此配置才可用
+        maxSurge: '50%' #更新过程中最大可新增pod数量(数字或比例-四舍五入)
+        maxUnavailable: 0 #更新过程中最大不可用pod数量(数字或比例-四舍五入) 如果搭配maxSurge则maxUnavailable必须为0
+    revisionHistoryLimit: 10 #运行保留更新记录数,用于回滚
+  ```
+
++ 使用配置
+
+  ```bash
+  kubectl apply -f fluentd-daemonset.yaml
+  ```
+
++ 查看
+
+  ```bash
+  kubectl get ds -n kube-system
+  kubectl get po -n kube-system #有两个fluentd的pod
+  kubectl rollout history ds fluentd-daemonset -n kube-system #默认成功创建也会产生一次历史
+  ```
+
+  > **默认不配置nodeSelector和其他的如affinity，默认会把daemonset中的pod派发到每一个Node节点**
+
+### 15.4.2 滚动更新
+
+`spec.updateStrategy.type`默认值是`RollingUpdate`所以支持滚动更新
+
+#### 15.4.2.1 操作
+
++ 更新操作 
+
+  ```bash
+  #1.直接edit
+  kubectl edit ds fluentd-daemonset -n kube-system
+  #2.直接set (set好像都是直接修改pod的)
+  kubectl set env ds fluentd-daemonset -n kube-system testenv=centos7
+  #3.直接apply 修改后配置文件
+  kubectl apply -f fluentd-daemonset.yaml
+  #4.直接patch(必须包含容器名)
+  kubectl patch ds fluentd-daemonset -n kube-system -p '{"spec":{"template":{"spec":{"containers":[{"name":"fluentd-c","env":[{"name":"testenv","value":"centos8"}]}]}}}}'
+  ```
+
+  > 如果要打注释记得立即执行`kubectl annotate`
+
++ 查看更新历史
+
+  ```bash
+  kubectl rollout history ds fluentd-daemonset -n kube-system
+  ```
+
+#### 15.4.2.2 更新策略
+
+指`spec.updateStragety`有以下两个选项
+
++ `RollingUpdate` 即滚动更新，更改后，立即对所以Pod生效
++ `OnDelete` 即更改后，仅在Pod被删除后才使用最新的配置重新创建Pod
+
+> 根据实际需求调整
+
+### 15.4.3 更新回滚
+
+和deployment的命令完全一样，注意`spec.revisionHistoryLimit`不能为0
+
+```bash
+kubectl rollout history ds fluentd-daemonset -n kube-system #查看所以历史版本
+kubectl rollout undo ds fluentd-daemonset -n kube-system --to-revision=3 #回滚到版本3
+```
+
+> 如果一些问题通过回滚发现还是无法解决如：镜像仓库地址写错了导致一直卡在`ImagePullBackOff`，查看实时配置文件已经更新，但是实际`describe`还是卡住了，那么**可以先删掉这个Pod，sts会自动以新配置创建新副本**
+
+### 15.4.4 nodeSelector动态调整
+
+前情回顾：不配置nodeSelector和其他的如affinity，默认会把daemonset中的pod派发到每一个Node节点
+
++ 查看机器上的pod
+
+  ```bash
+  # 有两台Node机器
+  kubectl get ds fluentd-daemonset -n kube-system #发现有两个pod节点，都是ready
+  kubectl get pod -n kube-system #看出两个fluentd的pod分配在node1和node2上，满足前情回顾
+  ```
+
++ 给k8s-node1机器打label
+
+  ```bash
+  kubectl label no k8s-node1 type=microservices # 给node1新增label(node2没有)
+  kubectl get no --show-labels #查看节点上的label
+  ```
+
++ 修改配置文件`fluentd-daemon.yaml`，或直接`kubectl edit ds fluentd-daemonst -n kube-system` **添加nodeSelector**
+
+  ```yaml
+  apiVersion: xxx
+  kind: xxxx
+  metadata: xxx
+  sepc:
+    ...
+    template:
+      nodeSelector: #节点选择使用Node机器上的label标签，map类型
+        type: microservices #node1新加的label
+  ```
+
++ 保存后，验证通过
+
+  ```bash
+  kubectl get dsd fluentd-daemonset -n kube-system #变成1个pod了
+  kubectl get po -n kube-system#只有一个fluentd的pod 且在node1上
+
++ 给node2打上label`type=microservices`
+
+  ```bash
+  kubectl label no k8s-node2 type=microservices
+  kubectl get no --show-labels
+  ```
+
++ 验证，发现**DaemonSet会自动在Node2新增fluentd pod
+
+  ```bash
+  kubectl get ds fluentd-daemonset -n kube-system #变成2个pod了
+  kubectl get po -n kube-system#fluentd在node1 node2上都有了
+  ```
+
+  > 结论：**DaemonSet会动态监听Node机器的label并根据nodeSelector实时调整（增/删）Pod**
+
+### 15.4.5 删除DaemonSet
+
++ `--cscade=backgroud` 默认 ，后台级联删除。（先删除ds，再删除pod）
++ `--cscade=foreground` 前台级联删除。（先删除pod，再删除ds）
++ `--cscade=orphan` 不进行级联删除（只删除ds，不删除pod）
+
+```bash
+kubectl delete ds fluentd-daemonset -n kube-system --cscade=orphan #只删除daemonset，不删除pod
+```
+
+### 15.4.6 无扩容缩容
+
+DaemonSet中没有replicas即扩容缩容这个概念
+
 ## 15.5 HorizontalPodAutoscaler(HPA)
+
+HorizontalPodAutoscaler 是水平 Pod 自动扩缩器的配置（一般用于deployment和statefulSet，RC，RS当然也可以），它根据指定的指标自动管理实现 scale 子资源的任何资源的副本数。
+
+控制器管理器即`kube-controller-manager`每隔15秒查询metrics的资源使用情况，可以使用通过`--horizontal-pod-autoscaler-sync-period`修改时间间隔。
+
+支持两种metrics查询方式：`Heapster`和自定义的RESTAPI 。
+
+支持的merics如下：
+
++ 预定义的metrics（如Pod的cpu利用率 (**默认支持**)   
+
+  详细介绍见 [HorizontalPodAutoscaler 是如何工作的](https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/#how-does-a-horizontalpodautoscaler-work)
+
++ 自定义的Pod metrics，以原始值(raw value)的方式计算
+
++ 自定义的object metrics
+
+> * **如果使用默认指标来进行自动扩容缩容，则需要先配置资源限制**`spec.template.containers.reources.request`**和**`spec.template.containers.reources.limit`
+> * ***依据CPU比例就是resources.requests.cpu的值，不是Node机器***
+
+### 15.5.0 api文档
+
++ api文档（两个版本）：
+  + https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/horizontal-pod-autoscaler-v1/ 基于默认指标
+  + https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/horizontal-pod-autoscaler-v2 基于自定义指标
+
++ 演练示例：https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
++ 介绍文档： https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/
+
+### 15.5.1 基于CPU
+
+
+
+### 15.5.2 基于自定义指标
+
+# 16. 指标服务Metrics Server
+
+对于 Kubernetes，**Metrics API** 提供了一组基本的指标，以支持自动伸缩和类似的用例。 该 API 提供有关节点和 Pod 的资源使用情况的信息， 包括 CPU 和内存的指标。如果将 Metrics API 部署到集群中， 那么 Kubernetes API 的客户端就可以查询这些信息，并且可以使用 Kubernetes 的访问控制机制来管理权限。
+
+[HorizontalPodAutoscaler](https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/) (HPA) 和 [VerticalPodAutoscaler](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler#readme) (VPA) 使用 metrics API 中的数据调整工作负载副本和资源，以满足客户需求。
+
+你也可以通过 [`kubectl top`](https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#top) 命令来查看资源指标。
+
+## 16.0 api文档
+
+参考文档：https://kubernetes.io/zh-cn/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/
+
+## 16.1 Metrics Server架构
+
+![image-20240927164143877](./_media/image-20240927164143877.png)
+
+图中从右到左的架构组件包括以下内容：
+
+- [cAdvisor](https://github.com/google/cadvisor): 用于收集、聚合和公开 Kubelet 中包含的容器指标的守护程序。
+- [kubelet](https://kubernetes.io/zh-cn/docs/concepts/architecture/#kubelet): 用于管理容器资源的节点代理。 可以使用 `/metrics/resource` 和 `/stats` kubelet API 端点访问资源指标。
+- [节点层面资源指标](https://kubernetes.io/zh-cn/docs/reference/instrumentation/node-metrics): kubelet 提供的 API，用于发现和检索可通过 `/metrics/resource` 端点获得的每个节点的汇总统计信息。
+- [metrics-server](https://kubernetes.io/zh-cn/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/#metrics-server): 集群插件组件，用于收集和聚合从每个 kubelet 中提取的资源指标。 API 服务器提供 Metrics API 以供 HPA、VPA 和 `kubectl top` 命令使用。Metrics Server 是 Metrics API 的参考实现。
+- [Metrics API](https://kubernetes.io/zh-cn/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/#metrics-api): Kubernetes API 支持访问用于工作负载自动缩放的 CPU 和内存。 要在你的集群中进行这项工作，你需要一个提供 Metrics API 的 API 扩展服务器。
+
+## 16.2 安装Metrics Server
+
+1. 下载Metrics-Components的配置文件
+
+   ```bash
+   wget https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -O metrics-components.yaml
+   ```
+
+2. 修改配置文件
+
+   ```bash
+   # 1.替换镜像地址,加速
+   sed -ie 's#image: registry.k8s.io/metrics-server/#image: 192.168.31.79:5000/dyrnq/#g' metrics-components.yaml|grep image # #为自定义分隔符代替/
+   # 2.metrics-server增加args --kubelet-insecure-tls参数,允许http访问
+   sed -ir 's#\-\-metric\-resolution\=15s#&\n\s{8}\-\s\-\-kubelet\-insecure\-tls#g' metrics-components.yaml
+   #效果如下
+   <<EOF
+   	spec:
+         containers:
+         - args:
+           - --cert-dir=/tmp
+           - --secure-port=10250
+           - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+           - --kubelet-use-node-status-port
+           - --metric-resolution=15s
+           - --kubelet-insecure-tls #允许http访问
+           image: 192.168.31.79:5000/dyrnq/metrics-server:v0.7.2
+   EOF
+   ```
+
+3. 执行安装
+
+   ```bash
+   kubectl apply -f metrics-components.yaml
+   kubectl get po -A|grep metrics
+   ```
+
+4. 验证
+
+   > **top输出的都是占用的资源，只能看Node和Pod**
+
+   ```bash
+   kubectl top no #查看no的资源利用
+   # Node节点的  cpu核心负载 	cpu利用率  内存使用量       内存利用率   
+   NAME         CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   
+   k8s-master   103m         5%     1219Mi          70%       
+   k8s-node1    40m          2%     723Mi           42%       
+   k8s-node2    36m          1%     683Mi           39%
+   
+   kubectl top pod #查看pod的资源利用
+   ```
+
+   
