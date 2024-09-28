@@ -2676,9 +2676,190 @@ HorizontalPodAutoscaler 是水平 Pod 自动扩缩器的配置（一般用于dep
 
 ### 15.5.1 基于CPU
 
+1. 定义一个Deployment和Service(为了使用负载均衡) `nginx-deploy-hpa.yaml`
+
+   ```yaml
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: nginx-svc
+     namespace: default
+   spec:
+     selector:
+       app: nginx
+     type: NodePort #表示使用Node节点即物理机的端口
+     ports:
+     - name: nginx-svc-port
+       protocol: TCP
+       port: 80 #Service监听的端口,可以理解Service就是一个nginx web
+       targetPort: 80 # Pod上容器的暴露的端口,servcie将port转发到target
+       NodePort: 30036 #当使用 NodePort(物理机端口) 类型的服务时指定,否则随机分配  访问NodeIP:NodePort
+   ---
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: nginx-deploy
+     namespace: default
+     labels:
+       app: nginx-deploy
+   spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         app: nginx
+     template:
+       metadata:
+         labels:
+           app: nginx
+         namespace: default
+       spec:
+         containers:
+         - name: nginx-c
+           image: 192.168.31.79:5000/nginx:latest
+           resources:
+             requests:
+               cpu: 20m
+               memory: 50Mi
+             limits:
+               cpu: 200m
+               memory: 128Mi
+           ports:
+           - containerPort: 80
+             name: nginx-c-port
+   ```
+
+2. 查看
+
+   因为`Service`中配置了`sepc.port.tyepe=NodePort`，所有我们可以直接使用Node节点的IP（物理机）在外部进行并发访问
+
+   ```bash
+   kubectl get pod # 查看有一个nginx-deploy的pod
+   kubectl get svc # 查看新建的服务,以及对外暴露的端口
+   kubectl top node # 查看node的资源利用率
+   kubectl top pod # 查看每个Pod的资源利用率
+   ```
+
+3. 定义自动扩缩容
+
+   具体算法见：[HorizontalPodAutoscaler 是如何工作的](https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/#how-does-a-horizontalpodautoscaler-work)
+
+   ```bash
+   # 1.定义一个hpa，当cpu达到20%时，自动扩容最大为5，当低于20%时自动缩容最小为1，该hpa的名字为nginx-hpa
+   kubectl autoscale deploy nginx-deploy --min=1 --max=5 --cpu-percent=20 --name=nginx-hpa
+   # 2.查看hpa定义
+   kubectl get hpa nginx-hpa
+   ```
+
+4. 查看HPA的配置文件(v2版本)
+
+   ```yaml
+   apiVersion: autoscaling/v2 # 使用的是v2版本的
+   kind: HorizontalPodAutoscaler # 资源类型为hpa
+   metadata:
+     name: nginx-hpa
+     namespace: default
+   spec:
+     maxReplicas: 5 #最大副本数
+     metrics: # 用于监控的指标
+     - resource: # 监控k8s已知的资源（如cpu和内存）
+         name: memory # 监控资源类型为cpu
+         target: #监控资源的目标值
+           averageUtilization: 20 # 跨所有相关 Pod 得出的资源指标均值的目标值， 表示为 Pod 资源请求值的百分比。仅对 “Resource”有效 
+           type: Utilization # 表示监控值的类型 Utilization(平均利用率)  Value(目标值) AverageValue(平均值)
+       type: Resource # 监控指标使用Resource
+     minReplicas: 1 #最小副本数
+     scaleTargetRef: #用于指定管理的资源对象信息
+       apiVersion: apps/v1 #被管理的资源api版本
+       kind: Deployment #被管理的资源类型
+       name: nginx-deploy #被管理的资源名字
+   ```
+
+5. 访问 http://NodeIP:30036 使用Node节点IP就是为了可以进行负载均衡，从而导致扩容（计算规则是所有Pod的资源占用）
+
+   使用性能测试工具，或者ab等等
+
+6. 查看no，pod资源利用率和Pod副本数量
+
+   ```bash
+   kubectl top node
+   kubectl top pod
+   kubectl get pod -l app=nginx
+   kubectl get hpa nginx-hpa # 直接查看cou使用情况和副本数
+   kubectl describe hpa nginx-hpa # 查看扩容缩容进度
+   ```
+
+   ![image-20240928164301038](./_media/image-20240928164301038.png)
+
+### 15.5.2 基于memory
+
+***和基于cpu的完全一样只是把HPA配置文件的***`sepc.metrics.resource.name`***的值变为***`memory`
+
+1. 定义基于`memory`自动扩容的配置文件`nginx-hpa-memory.yaml`
+
+   ```yaml
+   apiVersion: autoscaling/v2 # 使用的是v2版本的
+   kind: HorizontalPodAutoscaler # 资源类型为hpa
+   metadata:
+     name: nginx-hpa
+     namespace: default
+   spec:
+     maxReplicas: 5 #最大副本数
+     metrics: # 用于监控的指标
+     - resource: # 监控k8s已知的资源
+         name: memory # 监控资源类型为memory
+         target: #监控资源的目标值
+           averageUtilization: 60 # 跨所有相关 Pod 得出的资源指标均值的目标值， 表示为 Pod 资源请求值的百分比。仅对 “Resource”有效 
+           type: Utilization # 表示监控值的类型 Utilization(平均利用率)  Value(目标值) AverageValue(平均值)
+       type: Resource # 监控指标使用Resource
+     minReplicas: 1 #最小副本数
+     scaleTargetRef: #用于指定管理的资源对象信息
+       apiVersion: apps/v1 #被管理的资源api版本
+       kind: Deployment #被管理的资源类型
+       name: nginx-deploy #被管理的资源名字
+   ```
+
+2. 使用配置文件`nginx-hpa-memory.yaml`
+
+   ```bash
+   kubectl apply -f nginx-hpa-memory.yaml #
+   ```
+
+3. 目前只有一个pod，进入pod容器中，下载`stress`工具
+
+   ```bash
+   # 1.进入pod中nginx-c容器中
+   kubectl exec -it nginx-deploy-8655f46645-z9tzt -c nginx-c -- /bin/bash
+   # 2.查看系统版本
+   cat /etc/os-release
+   # 3.更新软件源并安装内存测试工具stress
+   apt-get update && apt-get install -y stress
+   # 4. 根据物理机实际大小酌情分配
+   stress -vm 1 --vm-bytes 100M --vm-hang 0 #不要退出
+   ```
+
+4. 查看情况，成功验证
+
+   ```bash
+   # 多看几次hpa，有延迟
+   kubectl top hpa gninx-hpa
+   kubectl get pod -w#监视pod的变化
+   kubectl describe hpa nginx-hpa #查看hpa允许详情
+   ```
+
+   ![image-20240928171900789](./_media/image-20240928171900789.png)
+
+### 15.5.3 基于自定义指标
+
+***前提安装Prometheus和Helm***
 
 
-### 15.5.2 基于自定义指标
+
+### 15.5.4 删除HPA
+
+```bash
+kubectl delete hpa nginx-hpa
+```
 
 # 16. 指标服务Metrics Server
 
