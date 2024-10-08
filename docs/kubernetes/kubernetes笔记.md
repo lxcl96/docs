@@ -2259,7 +2259,7 @@ StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-
   + 构建新镜像busybox:1.28.4,验证
 
     ```bash
-    $kubectl run test-busybox --image=busybox:1.28.4 --restart=Never #构建pod
+    $kubectl run test-busybox --image=busybox:1.28.4 --restart=Never -- top #构建pod，/bin/sh没有还是会退出
     $kubectl exec -it test-busybox -c test-busybox -- /bin/sh #pod内镜名字可以通过get pod -o yaml获取
         $nslookup nginx-sys-1.nginx-svc.default.svc.cluster.local #域名查询
         Server:    10.96.0.10
@@ -2938,3 +2938,221 @@ kubectl delete hpa nginx-hpa
    ```
 
    
+
+# 17. Service
+
+在 kubernetes 中，当创建带有多个副本的 deployment 时，kubernetes 会创建出多个  pod，此时即一个服务后端有多个容器，那么在 kubernetes 中负载均衡怎么做？容器漂移后 ip 也会发生变化，如何做服务发现以及会话保持？
+
+这就是 service 的作用，**service 是一组具有相同 label pod  集合的抽象，集群内外的各个服务可以通过 service 进行互相通信，当创建一个 service 对象时也会对应创建一个 endpoint  对象。endpoint 是用来做容器发现（服务发现），service 只是将多个 pod 进行关联，实际的路由转发（负载均衡）都是由 kubernetes 中的  kube-proxy 组件来实现**，因此，service 必须结合 kube-proxy 使用，kube-proxy 组件可以运行在  kubernetes 集群中的每一个节点上也可以只运行在单独的几个节点上，其会根据 service 和 endpoints 的变动来改变节点上 iptables 或者 ipvs 中保存的路由规则。
+
+> service也是一个服务（有自己的ip）；service 是一组具有相同 label pod  集合的抽象；service 只是将多个 pod 进行关联
+
+## 17.0 api文档
+
++ Service api文档： https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/service-resources/service-v1/#Service
++ Endpoint api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/service-resources/endpoints-v1/
++ 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/#discovering-services
+
+## 17.1 定义Service
+
+以NodePort为例
+
++ 命令行创建（**重点：selector**）
+
+  目录帮助： https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#-em-service-em-
+
+  ```bash
+  ######方法1 
+  # 使用已存在的service nginx-svc作为模板，创建新的service test-nginx-svc并指定service的selector为 app=nginx
+  kubectl expose service nginx-svc --type=NodePort --port=80 --protocol=TCP --target-port=80 --selector=app=nginx --name=test-nginx-svc 
+  ######方法2 
+  # 1.创建需要的服务
+  kubectl cerate service clusterip --help # 创建clusterip服务
+  kubectl create service nodeport test-nginx-svc --node-port 30037 --tcp=80:80 # 创建nodeport服务
+  kubectl cerate service externalname --help # 创建externalname服务
+  kubectl cerate service loadbalancer --help# 创建loadbalancer服务
+  # 2.对于Nodeport这样创建的是无头服务，即没有创建endpoint。因为直接使用create命令无法定义selector，因此没有对应的endpoint解析到对应的pod上，因此需要我们手动添加endpoint或更改配置文件的selector
+  kubectl edit svc test-nginx-svc # 进入svc编辑界面，修改selector加上 app=nginx 保存即可
+  ```
+
++ 配置文件创建（**推荐**）
+
+  ```yaml
+  apiVersion: v1 # 使用api版本
+  kind: Service # 资源的类型
+  metadata: # 该资源的元数据信息
+    annotations: #注解
+      # 通过kubectl apply -f或kubectl create -f --save-config自动生成的配置信息，用于更新配置时使用
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"name":"nginx-svc","namespace":"default"},"spec":{"ports":[{"name":"nginx-svc-port","nodePort":30036,"port":80,"protocol":"TCP","targetPort":80}],"selector":{"app":"nginx"},"type":"NodePort"}}
+    creationTimestamp: "2024-10-08T06:49:33Z" #自动生成
+    name: test-nginx-svc # Service的名字
+    namespace: default # Service的命名空间
+    resourceVersion: "507206" # 资源版本（自动生成）
+    uid: 0ee6f846-12c9-416e-bd7e-a12d95a954e7 # 自动生成
+  spec: # service的规约、规范
+    clusterIP: 10.100.190.66 # 该service服务的集群ip，不指定会自动生成（如果为Node表示为无头服务）
+    clusterIPs: # 分配给service服务的集群ip列表，不指定会自动生成（如果为Node表示为无头服务）
+    - 10.100.190.66
+    # 注意外部流量的含义：NodePort、ExternalIP 和 LoadBalancer IP
+    # 表示来自外部流量（NodePort等）控制策略，有Local（kube-proxy认为使用外部的负载均衡器，因此每个Node节点将仅向服务的节点本地端点传递流量，而不会伪装客户端源 IP）和Cluster（默认值，kube-proxy使用负载均衡将流量路由到所有端点endpoint）
+    externalTrafficPolicy: Cluster 
+    # 表示来自内部流量（ ClusterIP）控制策略，有Local（kube-proxy将流量转发到同一Node节点上的端点endpoint，如果该endpoint不存在就丢弃）和Cluster（默认值，kube-proxy将流量路由到所有端点endpoint）
+    internalTrafficPolicy: Cluster 
+    ipFamilies: # 表示分配给服务的IP协议（例如 IPv4、IPv6）的列表。该字段通常根据集群配置和 ipFamilyPolicy 字段自动设置
+    - IPv4
+    # SingleStack（默认值，单个 IP 协议）、 PreferDualStack（双栈配置集群上的两个 IP 协议或单栈集群上的单个 IP 协议） 或 RequireDualStack（双栈上的两个 IP 协议配置的集群，否则失败）
+    ipFamilyPolicy: SingleStack # 表示此服务请求或要求的双栈特性 
+    ports: # 服务的端口组信息
+    # 即将nodeport端口请求转发到targetport端口（Pod容器）上
+    - name: nginx-svc-port # 表示端口组信息中的第一个 名字
+      nodePort: 30036 # 暴露的NodePort端口,不指定随机端口（30000-32767）
+      port: 80 # service使用（监听）的端口
+      protocol: TCP # 使用TCP协议
+      targetPort: 80 # Pod容器的端口
+    # 没有selector就是无头服务Headless service即不会自动创建endpoint
+    selector: # 表示该Service作用于具有以下label的Pod
+      app: nginx
+    # 会话的亲和性，即确保来自特定客户端的连接每次都传递到同一个 Pod
+    sessionAffinity: None #  ClientIP 或 None（默认）
+    type: NodePort # Service使用哪种规则。有ClusterIP（默认）、NodePort、ExternalName、LoadBalancer
+  # k8s自动采集维护的（只读）
+  status: 
+    loadBalancer: {}
+  ```
+
++ 测试
+
+  ```bash
+  kubectl run busybox --image=192.168.31.79:5000/busybox:1.28.4 -- top # /bin/sh不行直接退出了，top才会一直运行
+  kubectl exec -it busybox -c busybox -- /bin/sh #进入容器
+  	\# wget -O- test-nginx-svc # 通过服务名直接访问成功（需要有selector）
+  	\# wget -O- metrics-server.kube-system # 可以跨命名空间访问
+  ```
+
+> service进行服务转发是通过label标签实现的，所以service必须写selector
+
+## 17.2 服务类型（Service type）
+
+Service支持的类型也就是Kubernetes中服务暴露的方式，默认有四种：
+
++ **ClusterIP**
++ **NodePort**
++ **LoadBalancer**
++ **ExternalName**
+
+## 17.3 Headless Service（无头服务）
+
+
+
+## 17.4 服务发现
+
+
+
+## 17.5 SessionAffinity会话亲和性
+
+## 17.6 代理k8s外部服务
+
+**为了让集群内Pod容器可以通过访问Service来访问集群外部服务（如Mysql），这对切换生产环境地址很有效。**比如，原来集群内Pod容器每个单独的访问外部服务地址，当需要切换或更改外部分服务地址时则需要更改所有关联的Pod容器配置文件，很麻烦。那么此时，我们可以**通过配置Service，在Pod容器内配置直接访问该Service地址而不是外部ip，而此Service搭配的endpoint指向集群外部ip地址**。这样每次切换服务地址**只需要修改与Service对应的Endpoint中地址**即可完成，即**只需要修改一次**。
+
+***使用步骤：***
+
++ 编写Service配置文件`nginx-svc-external-svc.yaml`，**不要指定selector属性**
+
+  *没有指定selector属性，此时不会生成对应的endpoint或生成的endpoint没有关联节点地址*
+
+  ```yaml
+  apiVersion: v1
+  kind: Service
+  metadata:
+    name: nginx-svc-external
+    namespace: default
+    labels:
+      app: ngx
+  spec: 
+    ports: 
+    - name: nginx-svc-external-port
+      port: 81
+      protocol: TCP
+      targetPort: 443 # 以bilibli地址为例
+    type: ClusterIP # NodePort也可以
+  ```
+
++ 编写或修改endpoint文件`nginx-svc-external-ep.yaml`（**必须和上面Service的label一样**）
+
+  *没有指定selector属性，此时不会生成对应的endpoint或生成的endpoint没有关联节点地址，所以需要自己手动添加修改*
+
+  ```yaml
+  apiVersion: v1
+  kind: Endpoints
+  metadata:
+    name: nginx-svc-external # 与service完全一致
+    namespace: default # 与service完全一致
+    labels: # 包含Service，是他的父集
+      app: ngx
+  subsets:
+  - addresses:
+    - ip: 8.134.50.24 # 外部服务地址 以bilibili地址为例
+    ports:
+    - name: nginx-svc-external-port # 必须和service中spec.ports[*].name完全匹配
+      port: 443 #记录后端Pod实际监听端口，通常和service中spec.ports.targetport一样(即外部服务地址的端口)
+      protocol: TCP
+  ```
+
++ 创建并验证Service和Pod正确
+
+  ```bash
+  $kubectl apply -f nginx-svc-external-svc.yaml
+  $kubectl apply -f nginx-svc-external-ep.yaml
+  $kubectl get svc,ep -o wide
+  NAME                         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE     SELECTOR
+  service/kubernetes           ClusterIP   10.96.0.1       <none>        443/TCP        18d     <none>
+  service/nginx-svc            NodePort    10.100.190.66   <none>        80:30036/TCP   6h29m   app=nginx
+  service/nginx-svc-external   ClusterIP   10.99.148.152   <none>        81/TCP         38m     <none># bilibili
+  
+  NAME                           ENDPOINTS                            AGE
+  endpoints/kubernetes           192.168.136.151:6443                 18d
+  endpoints/nginx-svc            10.244.169.130:80,10.244.36.120:80   6h29m
+  endpoints/nginx-svc-external   8.134.50.24:443                      3s#bilibili
+  ```
+
++ Pod容器中使用
+
+  ```bash
+  kubectl exec -it busybox -c busybox -- /bin/sh
+  	# 通过Service内部域名，代替外部ip地址访问
+  	\# telnet nginx-svc-external 81 # 任意输入命令，中断连接，显示返回html数据（正确访问）
+  	\# wget -O- nginx-svc-external:81 # 返回400 Bad Request（正确访问）
+  ```
+
++ 即在内部Pod容器通过Service名代替实际IP，实现反向代理内部到外部。从而更新地址时只需要维护Service对应的Endpoint即可
+
+## 17.7 反向代理外部域名
+
+通过使用**type=ExternalName**实现，反向代理外部域名。（内部Pod容器访问外部）
+
++ 定义Service配置文件`nginx-svc-externalname.yaml`
+
+  ```yaml
+  apiVersion: v1
+  kind: Service
+  metadata:
+    name: nginx-svc-externalname
+    namespace: default
+    labels:
+      app: ngx-externalname
+  spec: 
+    type: ExternalName # 使用域名CNAME
+    externalName: www.bilibili.com
+  ```
+
++ 创建service并验证
+
+  ```bash
+  $kubectl apply -f nginx-svc-externalname.yaml
+  $kubectl exec -it busybox -c busybox -- /bin/sh
+  	\# wget -O- nginx-svc-externalname # 访问 http协议的www.bilibili.com
+  	\# wget -O- https://nginx-svc-externalname # 访问 https协议的www.bilibili.com
+  	# 以上会出现400bad request或403Forbiden 这是因为k8s转发请求会将 请求头Host:my-service，所以导致服务不认，使用以下方法解决
+  	 wget --header="Host: bilibili,com" http://nginx-svc-externalname
+  ```
