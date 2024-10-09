@@ -2274,7 +2274,7 @@ StatefulSet 用来管理（有状态应用）某 [Pod](https://kubernetes.io/zh-
 > + Node节点上有多个网卡，所以容器默认暴露的端口我们可以通过calico创建的网卡地址访问（不是实际的网卡ens33）
 > + 不暴露容器内服务端口（nginx：80），则该服务只能进入容器自身内访问或在其他容器内通过ip:port访问，在外边Master节点、Node节点都无法访问（通过ip或自定义域名）。
 > + 在容器内向外暴露80端口，此时在Master节点，Node节点你可以通过ip:port访问（自定义域名还是不行）。
-> + 在容器内向外暴露80端口，构建**无头服务即Headless Service**没有绑定具体ip地址，k8s会在创建的每个容器内基于一定规则**修改hosts，在其中维护当前容器的IP地址，和对应的自定义域名**，在此种情况下，容器间（容器内部）就可以通过这个hosts中自定义域名相互通信，即根据**服务名通信**，此时Master节点，Node节点还是只能通过ip:port访问，无法使用自定义服务名（域名）。**简单说就是k8s维护自定义域名，客户端发起DNS查询，k8s解析DNS然后返回Pod的ip地址，客户端选择一个ip地址进行连接，实现客户端与Pod直接通信（而不是经过k8s代理转发到Pod上），所以此时不支持负载均衡和服务发现。现在是Pod的直接发现**
+> + 在容器内向外暴露80端口，构建**无头服务即Headless Service**没有绑定具体ip地址，k8s会在创建的每个容器内基于一定规则**修改hosts，在其中维护当前容器的IP地址，和对应的自定义域名**，在此种情况下，容器间（容器内部）就可以通过这个hosts中自定义域名相互通信，即根据**服务名通信**，此时Master节点，Node节点还是只能通过ip:port访问，无法使用自定义服务名（域名）。**简单说就是k8s维护自定义域名，客户端发起DNS查询，k8s解析DNS然后返回全部Pod的ip地址，客户端选择一个ip地址进行连接，实现客户端与Pod直接通信（而不是经过k8s代理转发到Pod上），所以此时不支持负载均衡和服务发现。现在是Pod的直接发现**
 > + 在容器内向外暴露80端口，构建**Service，绑定了ip地址**，可以实现负载均衡和服务发现
 
 ### 15.3.2 扩容和缩容
@@ -2939,7 +2939,7 @@ kubectl delete hpa nginx-hpa
 
    
 
-# 17. Service
+# 17. ==*Service*==
 
 在 kubernetes 中，当创建带有多个副本的 deployment 时，kubernetes 会创建出多个  pod，此时即一个服务后端有多个容器，那么在 kubernetes 中负载均衡怎么做？容器漂移后 ip 也会发生变化，如何做服务发现以及会话保持？
 
@@ -3030,26 +3030,144 @@ kubectl delete hpa nginx-hpa
   	\# wget -O- metrics-server.kube-system # 可以跨命名空间访问
   ```
 
-> service进行服务转发是通过label标签实现的，所以service必须写selector
+> service进行服务转发是通过label标签实现的，所以service必须写selector（除非是代理外部服务地址）
 
 ## 17.2 服务类型（Service type）
 
 Service支持的类型也就是Kubernetes中服务暴露的方式，默认有四种：
 
-+ **ClusterIP**
-+ **NodePort**
-+ **LoadBalancer**
-+ **ExternalName**
++ **ClusterIP** **只用于集群内部通信**
+
+  通过集群的内部 IP 公开 Service，选择该值时 Service 只能够在集群内部访问。 这也是你没有为 Service 显式指定 `type` 时使用的默认值。 你可以使用 [Ingress](https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress/) 或者 [Gateway API](https://gateway-api.sigs.k8s.io/) 向公共互联网公开服务。
+
+  **具体访问流程如下：**
+
+  1. 访问`DNS`服务获取`Service`的实际`ClusterIP`（**如果是直接访问ClusterIP此步可忽略**）
+  2. 访问`ClusterIP:Serviceport`指定service服务如nginx-svc
+  3. 指定的service服务如nginx-svc转发到对应的`EndPoint`上，根据`Endpoint`上关联的Pod地址和端口访问到具体Node
+  4. 请求到具体Node上的`kube-proxy`上，根据`iptables`或`ipvs`进行路由转发或进行负载均衡
+  5. 请求被`kube-proxy`转发到达具体Pod的容器Port上
+
+  ![image-20241009142409951](./_media/image-20241009142409951.png)
+
+  > service是一个服务（类似nginx），监听一个端口
+
++ **NodePort** **可以用于集群内部通信,也可以用于外部通信(不推荐)**
+
+  通过每个节点（Node和Master）上的 IP 和静态端口（`NodePort`）公开 Service。 为了让 Service 可通过节点端口访问，Kubernetes 会为 Service 配置集群 IP 地址， 相当于你请求了 `type: ClusterIP` 的 Service。即会在所有安装了`kube-proxy`的节点上绑定一个端口（类似于运行nginx服务），可以通过集群内任意节点的IP+NodePort端口进行访问。NodePort默认范围在30000-32767，**可以修改文件**`/etc/kubernetes/manifests/kube-apiserver.yaml`，追加`--service-node-port-range=79-32767`进行覆盖，**k8s会检测到配置文件变化，自动更新**。
+
+  ***访问流程：***
+
+  + **集群内**
+
+    **见上，和ClusterIP完全一样**
+
+  + **集群外**
+
+    1. 集群外机器访问集群内`NodePort`服务，任意节点机器都可以如`192.168.136.151:30036`
+    2. NodePort服务首先访问`DNS`服务获取`Service`的实际`ClusterIP`
+    3. NodePort服务将请求转发到`ClusterIP:Serviceport`指定service服务如nginx-svc
+    4. 指定的service服务如nginx-svc转发到对应的`EndPoint`上，根据`Endpoint`上关联的Pod地址和端口访问到具体Node
+    5. 请求到具体Node上的`kube-proxy`上，根据`iptables`或`ipvs`进行路由转发或进行负载均衡
+    6. 请求被`kube-proxy`转发到达具体Pod的容器Port上
+
+  ![image-20241009151017306](./_media/image-20241009151017306.png)
+
+  > NodePort是一个服务（类似nginx），监听一个端口
+
++ **LoadBalancer** **配置外部的负载均衡器(如阿里云)代替kube-proxy**
+
+  使用云平台的负载均衡器向外部公开 Service。Kubernetes 不直接提供负载均衡组件； 你必须提供一个，或者将你的 Kubernetes 集群与某个云平台集成。
+
+  具体见[17.9 k8s访问方式](#17.9 k8s访问方式)
+
+  > 如果使用外部负载均衡器（如nginx）可以不配置LoadBalancer（转发到NodePort上），如果使用云平台负载均衡器则必须配置LoadBalancer（可以直接转发到Pod容器服务，当然也可以转发到NodePort）。
+
++ **ExternalName** **service映射到外部域名**
+
+  将服务映射到 `externalName` 字段的内容（例如，映射到主机名 `api.foo.bar.example`）。 该映射将集群的 DNS 服务器配置为返回具有该外部主机名值的 `CNAME` 记录。 集群不会为之创建任何类型代理。
+
+  > 即当Pod内容器使用该Service访问（域名访问），会自动将请求跳转到对应的域名地址。（反向代理访问外部域名）
 
 ## 17.3 Headless Service（无头服务）
 
+当配置文件中`ClusterIP=None`时表示使用的就是无头服务，即该Service不存在ClusterIP，kube-proxy也就不会进行负载均衡。**访问逻辑就是Pod访问DNS服务（CoreDNS或kube-DNS）获取全部Pod的IP，客户端采取一定的规则（如轮询）选择其中一个Pod地址直接进行访问，不经过kube-proxy。**也就是说Headless Service 无头服务中**不可用于k8s的服务发现和负载均衡**
 
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc-headless
+  namespace: default
+  labels:
+    app: headless
+    target: ngx-headless
+spec:
+  selector: # 选择Pod（是否可以和Pod通信，和哪些Pod全靠它）
+    target: ngx-headless
+  ports:
+  - port: 80 # 如果不写targetPort，则默认targetPort=port
+    targetPort: 80 #  对于 clusterIP 为 None 的服务，此字段将被忽略， 应忽略不设或设置为 port 字段的取值
+  clusterIP: None
+  type: ClusterIP
+```
 
-## 17.4 服务发现
+访问进入另一个Pod容器中如centos，执行`curl nginx-svc-headless.deafult -v`即可查看
 
+## 17.4 Service服务发现
 
+在 Kubernetes 中，**服务发现** 是指 **一个容器（通常运行在 Pod 内的应用程序）通过 Kubernetes 提供的机制找到并连接到另一个 Pod 中的容器**。它解决了在动态环境中，如何让容器之间自动找到并通信的问题。
+
+对于在集群内运行的客户端（Pod内容器），Kubernetes 支持两种主要的服务发现模式：**环境变量和 DNS**。
+
++ 基于**环境变量**
+
+  k8s在Pod启动时为其自动注入一组环境变量（指Pod内所有容器中），其中包含与服务相关的信息，比如服务的IP地址和端口。
+
+  **优点： **简单直接，适合固定且无需频繁变动的服务
+
+  **缺点：**灵活度较低，如果ClusterIP或端口变化，环境变量也无法更新。只能重启Pod更新环境变量
+
+  > 一旦Pod运行，环境变量就不会自动更新。因此需要**先创建好Service再启动Pod**。
+
++ 基于**DNS**
+
+  利用Kubernetes的CoreDNS组件，为每个Service服务提供基于DNS名称的解析。当前 kubernetes 集群默认使用 CoreDNS 作为默认的 DNS 服务，主要原因是 CoreDNS 是基于 Plugin 的方式进行扩展的，简单，灵活，并且不完全被Kubernetes所捆绑。
+
+  **优点： **动态性强，总能获取最新Service配置信息；广泛使用，几乎支持所有场景且k8s中推荐使用；无头服务支持，直接访问Pod
+
+  **缺点：**依赖DNS服务，需要安装单独插件。且若DNS服务出现问题就无法使用
 
 ## 17.5 SessionAffinity会话亲和性
+
+针对某些有状态服务，SessionAffinity可以将**来自特定客户端（同一ip）的连接每次都传递到同一个 Pod**，以此来保持会话的黏性。
+
+具体配置文件如下：
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc-session-affinity
+  namespace: default
+  labels:
+    app: nginx-svc-session-affinity
+spec:
+  selector:
+    app: nginx
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+  sessionAffinity: ClientIP # 默认为None不开启，ClientIP表示根据IP进行区分是否为同一请求
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 20 #默认为10800s(3个小时)，有效范围为0<x<=86400(1天)
+```
+
+实现原理是：当设置`sessionAffinity=ClientIP`时，**kube-proxy会在负载均衡时记住每个请求客户端的IP地址，并将同一个IP地址的流量转发到同一个Pod（依据iptables或ipvs）**。
+
+> 可以先将服务设置`sessionAffinity=None`，进入centos容器发送请求如`curl nginx-svc-session-affinity.deafult`，观察都随机的Pod地址进行响应。然后更改`sessionAffinity=ClientIP`，再次进入centos容器发送请求，发现都是同一个Pod地址。(最好改动nginx的index.html便于区分)
 
 ## 17.6 代理k8s外部服务
 
@@ -3127,6 +3245,8 @@ Service支持的类型也就是Kubernetes中服务暴露的方式，默认有四
 
 + 即在内部Pod容器通过Service名代替实际IP，实现反向代理内部到外部。从而更新地址时只需要维护Service对应的Endpoint即可
 
+> 代理k8s外部服务时，`ClusterIP`存在且不为`None`
+
 ## 17.7 反向代理外部域名
 
 通过使用**type=ExternalName**实现，反向代理外部域名。（内部Pod容器访问外部）
@@ -3156,3 +3276,23 @@ Service支持的类型也就是Kubernetes中服务暴露的方式，默认有四
   	# 以上会出现400bad request或403Forbiden 这是因为k8s转发请求会将 请求头Host:my-service，所以导致服务不认，使用以下方法解决
   	 wget --header="Host: bilibili,com" http://nginx-svc-externalname
   ```
+
+> `type=ExternalName`时`ClusterIP=None`
+
+## 17.8 Service负载均衡和外部负载均衡器的区别
+
++ **Service的负载均衡是指集群内部，kube-proxy将请求均衡的转发到Pod容器中**
++ **外部负载均衡是指集群外部，将外部的请求均衡的转发到Node节点的NodePort上**
++ 他俩不是一个层面的均衡
+
+![image-20241009155034958](./_media/image-20241009155034958.png)
+
+## 17.9 k8s访问方式
+
+![1460000043642909](./_media/1460000043642909.webp)
+
+![1460000043642910](./_media/1460000043642910.webp)
+
+![1460000043642911](./_media/1460000043642911.webp)
+
+![1460000043642912](./_media/1460000043642912.webp)
