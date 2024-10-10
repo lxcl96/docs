@@ -3073,7 +3073,7 @@ Service支持的类型也就是Kubernetes中服务暴露的方式，默认有四
 
   ![image-20241009151017306](./_media/image-20241009151017306.png)
 
-  > NodePort是一个服务（类似nginx），监听一个端口
+  > NodePort是一个服务（类似nginx），监听一个端口。NodePort不推荐外网访问,**处于第4层负载,无法解析网络层**(请求头,请求地址等等)。推荐使用ingress，处于**第七层负载，可以解析网络层**
 
 + **LoadBalancer** **配置外部的负载均衡器(如阿里云)代替kube-proxy**
 
@@ -3274,7 +3274,7 @@ spec:
   	\# wget -O- nginx-svc-externalname # 访问 http协议的www.bilibili.com
   	\# wget -O- https://nginx-svc-externalname # 访问 https协议的www.bilibili.com
   	# 以上会出现400bad request或403Forbiden 这是因为k8s转发请求会将 请求头Host:my-service，所以导致服务不认，使用以下方法解决
-  	 wget --header="Host: bilibili,com" http://nginx-svc-externalname
+  	 wget --header="Host: bilibili.com" http://nginx-svc-externalname
   ```
 
 > `type=ExternalName`时`ClusterIP=None`
@@ -3296,3 +3296,1291 @@ spec:
 ![1460000043642911](./_media/1460000043642911.webp)
 
 ![1460000043642912](./_media/1460000043642912.webp)
+
+## 17.10 service的负载均衡
+
+service 实际的路由转发都是由 kube-proxy 组件来实现的，service 仅以一种 VIP（ClusterIP） 的形式存在，kube-proxy 主要实现了集群内部从 pod 到 service 和集群外部从  nodePort 到 service 的访问，kube-proxy 的路由转发规则是通过其后端的代理模块实现的，kube-proxy  的代理模块目前有四种实现方案，**userspace、iptables、ipvs、kernelspace**，其发展历程如下所示：
+
+- kubernetes v1.0：services 仅是一个“4层”代理，代理模块只有 userspace
+- kubernetes v1.1：Ingress API 出现，其代理“7层”服务，并且增加了 iptables 代理模块
+- kubernetes v1.2：iptables 成为默认代理模式
+- kubernetes v1.8：引入 ipvs 代理模块
+- kubernetes v1.9：ipvs 代理模块成为 beta 版本
+- kubernetes v1.11：ipvs 代理模式 GA
+
+> userspace、iptables、ipvs 三种模式中默认的负载均衡策略都是通过 round-robin 算法来选择后端 pod 的
+
+### 17.10.1 userspace 模式
+
+在 userspace 模式下，访问服务的请求到达节点后首先进入**内核(linux的) iptables**，然后回到用户空间，由 kube-proxy 转发到后端的 pod，这样流量从用户空间进出内核带来的性能损耗是不可接受的，所以也就有了 iptables 模式。
+
+为什么 userspace 模式要建立 iptables 规则，因为 kube-proxy  监听的端口在用户空间，这个端口不是服务的访问端口也不是服务的 nodePort，因此需要一层 iptables 把访问服务的连接重定向给  kube-proxy 服务。
+
+### 17.10.2 iptables 模式
+
+iptables 模式是目前默认的代理方式，基于 netfilter 实现。当客户端请求  service 的 ClusterIP 时，根据 iptables 规则路由到各 pod 上，iptables 使用 DNAT  来完成转发，其采用了随机数实现负载均衡。
+
+iptables 模式与 userspace  模式最大的区别在于，iptables 模块使用 DNAT 模块实现了 service 入口地址到 pod  实际地址的转换，免去了一次内核态到用户态的切换，另一个与 userspace 代理模式不同的是，如果 iptables 代理最初选择的那个  pod 没有响应，它不会自动重试其他 pod。
+
+iptables 模式最主要的问题是在 service 数量大的时候会产生太多的 iptables 规则，使用非增量式更新会引入一定的时延，大规模情况下有明显的性能问题。
+
+### 17.10.3 ipvs 模式
+
+当集群规模比较大时，iptables  规则刷新会非常慢，难以支持大规模集群，因其底层路由表的实现是链表，对路由规则的增删改查都要涉及遍历一次链表，ipvs  的问世正是解决此问题的，ipvs 是 LVS 的负载均衡模块，与 iptables 比较像的是，ipvs 的实现虽然也基于 netfilter  的钩子函数，但是它却使用哈希表作为底层的数据结构并且工作在内核态，也就是说 ipvs  在重定向流量和同步代理规则有着更好的性能，几乎允许无限的规模扩张。
+
+ipvs  支持三种负载均衡模式：DR模式（Direct Routing）、NAT 模式（Network Address  Translation）、Tunneling（也称 ipip 模式）。三种模式中只有 NAT 支持端口映射，所以 ipvs 使用 NAT  模式。linux 内核原生的 ipvs 只支持 DNAT，当在数据包过滤，SNAT 和支持 NodePort 类型的服务这几个场景中ipvs  还是会使用 iptables。
+
+此外，ipvs 也支持更多的负载均衡算法，例如：
+
+- rr：round-robin/轮询
+- lc：least connection/最少连接
+- dh：destination hashing/目标哈希
+- sh：source hashing/源哈希
+- sed：shortest expected delay/预计延迟时间最短
+- nq：never queue/从不排队
+
+### 17.10.4 kernelspace模式
+
+主要用于windows
+
+# 18. Ingress
+
+[Ingress](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#ingress-v1-networking-k8s-io) 提供从集群外部到集群内[服务](https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/)的 HTTP 和 HTTPS 路由。 流量路由由 Ingress 资源所定义的规则来控制。
+
+通过配置，Ingress 可为 Service 提供外部可访问的 URL、对其流量作负载均衡、 终止 SSL/TLS，以及基于名称的虚拟托管等能力。 [Ingress 控制器](https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress-controllers) 负责完成 Ingress 的工作，具体实现上通常会使用某个负载均衡器， 不过也可以配置边缘路由器或其他前端来帮助处理流量。
+
+Ingress 不会随意公开端口或协议。 将 HTTP 和 HTTPS 以外的服务开放到 Internet 时，通常使用 [Service.Type=NodePort](https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/#type-nodeport) 或 [Service.Type=LoadBalancer](https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/#loadbalancer) 类型的 Service。
+
+
+
+## 18.0 api文档
+
++ ingress api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/service-resources/ingress-v1/
++ ingress 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress/
+
+## 18.1 环境准备（安装ingress-nginx）
+
+必须拥有一个 [Ingress 控制器](https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress-controllers) 才能满足 Ingress 的要求。**仅创建 Ingress 资源（指yaml配置文件）**本身没有任何效果。以ingress-nginx为例子：
+
+ingress控制器大全： https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress-controllers/（**不仅仅是ingress-nginx**）
+
+ingress-nginx 官网安装向导：https://kubernetes.github.io/ingress-nginx/deploy/#contents
+
+### 18.1.1 安装helm
+
+helm官网安装指南：https://helm.sh/zh/docs/intro/install/
+
+> 安装前查看：https://helm.sh/zh/docs/topics/version_skew/下载与当前kubernetes版本对应的helm版本
+
++ 脚本安装
+
+  ```bash
+  $ curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+  $ chmod 700 get_helm.sh
+  $ ./get_helm.sh
+  ###或者下面一条命令
+  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  ```
+
++ 包管理器安装
+
+  + homebrew--针对macos
+  + chocolatey--针对windows
+  + scoop--针对windows
+  + winget--针对windows
+  + apt--针对Debian或Ubuntu
+  + dnf/yum 针对fedora
+  + 等等
+
++ **二进制文件安装（推荐）**
+
+  ```bash
+  # 1.查看当前kubernetes版本
+  $kubectl version # 我的k8s是v1.23.17版本（GitVersion）
+  # 2.对照helm版本表选出支持的helm版本  https://helm.sh/zh/docs/topics/version_skew/
+  	我选择helm-3.10.x
+  # 3.访问https://github.com/helm/helm/releases 确定要下载的helm版本 (注意下载链接不在Assets中)
+  	我选择helm-3.10.3
+  # 4.下载helm-3.10.3二进制文件
+  $wget https://get.helm.sh/helm-v3.10.3-linux-amd64.tar.gz #Installation and Upgrading 标题下（Linux amd64）
+  # 5. 解压helm-3.10.3
+  $tar -zxvf helm-v3.10.3-linux-amd64.tar.gz
+  # 6. 拷贝helm到/user/local/bin
+  $sudo cp linux-amd64/helm /usr/local/bin/
+  # 7.验证helm是否成功安装
+  $helm version # version.BuildInfo{Version:"v3.10.3", GitCommit:"835b7334cfe2e5e27870ab3ed4135f136eecc704", GitTreeState:"clean", GoVersion:"go1.18.9"}
+  ```
+
+
+### 18.1.2 helm添加ingress-nginx仓库
+
+```bash
+# 1. 添加ingress-nginx仓库地址
+$helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+# 2.查看现有仓库列表
+$helm repo list
+# 3. 搜索ingress-nginx仓库,查看有哪些k8s插件
+$helm search repo ingress-nginx
+NAME                       	CHART VERSION	APP VERSION	DESCRIPTION                                       
+ingress-nginx/ingress-nginx	4.11.3       	1.11.3     	Ingress controller for Kubernetes using NGINX a...
+```
+
+### 18.1.3 helm下载ingress-nginx包
+
+> 参考表:https://github.com/kubernetes/ingress-nginx?tab=readme-ov-file.选择适合自己k8s版本的ingress-nginx
+
+```bash
+# 1.下架chart版本为4.4.2的ingress-nginx
+$helm pull ingress-nginx/ingress-nginx --version=4.4.2
+# 2.解压下载的文件 ingress-nginx-4.4.2.tgz
+$tar -xf ingress-nginx-4.4.2.tgz
+# 3.进入ingress-nginx目录
+$cd ingress-nginx&&ls
+CHANGELOG.md  changelog.md.gotmpl  Chart.yaml  ci  OWNERS  README.md  README.md.gotmpl  templates  values.yaml
+```
+
+### 18.1.4 修改ingress-nginx的配置文件
+
+就是上一步看到的`value.yaml`文件
+
+1. 修改所有的镜像地址为国内镜像（**验证的digest必须注释掉，否则不匹配**）
+
+   > 推荐使用vscode，搜索`image:` （**镜像可以去hub.docker上拉取，就是要仔细查找**）
+
+   ```yaml
+   # 修改1
+   controller:
+     name: controller
+     image:
+       chroot: false
+       # registry: registry.k8s.io
+       registry: 192.168.31.79:5000
+       # image: ingress-nginx/controller
+       image: dyrnq/ingress-nginx-controller
+       tag: "v1.5.1"
+       #digest: sha256:4ba73c697770664c1e00e9f968de14e08f606ff961c76e5d7033a4a9c593c629 # 必须注释掉或者改为镜像一致的digest
+       #digestChroot: sha256:c1c091b88a6c936a83bd7b098662760a87868d12452529bad0d178fb36147345
+   ```
+
+   ```yaml
+   # 修改2
+   controller:
+     opentelemetry:
+       enabled: false
+       # image: registry.k8s.io/ingress-nginx/opentelemetry:v20221114-controller-v1.5.1-6-ga66ee73c5@sha256:41076fd9fb4255677c1a3da1ac3fc41477f06eba3c7ebf37ffc8f734dad51d7c
+       image: 192.168.31.79:5000/ingress-nginx/opentelemetry:v20221114-controller-v1.5.1-6-ga66ee73c5
+   ```
+
+   ```yaml
+   # 修改3
+   controller:
+     admissionWebhooks:
+       patch:
+         image:
+           registry: 192.168.31.79:5000
+           # registry: registry.k8s.io
+           # image: ingress-nginx/kube-webhook-certgen
+           image: dyrnq/kube-webhook-certgen
+           tag: v20220916-gd32f8c343
+           #digest: sha256:39c5b2e3310dc4264d638ad28d9d1d96c4cbb2b2dcfb52368fe4e3c63f61e10f
+   ```
+
+   ```yaml
+   # 修改4
+   defaultBackend:
+     image:
+       registry: 192.168.31.79:5000
+       # registry: registry.k8s.io
+       # image: defaultbackend-amd64
+       image: dyrnq/defaultbackend-amd64
+       tag: "1.5"
+   ```
+
+2. 修改ingress-nginx为DaemonSet类型（默认是Deployment）,**并添加nodeSelector**，为了将此DaemonSet部署在具有指定label标签的Node节点上
+
+   ```yaml
+   controller:
+     # kind: Deployment
+     kind: DaemonSet
+     ...
+     nodeSelector: #原来就有的
+     	kubernetes.io/os: linux #原来就有的
+       ingress: "true" # 自己追加的,布尔值用引号表示字符串
+   ```
+
+3. 修改ingress-nginx网络配置
+
+   ```yaml
+   controller:
+     # hostNetwork: false
+     hostNetwork: true # 本地有CNI插件，所有使用本地网络
+     ...
+     # -- Optionally change this to ClusterFirstWithHostNet in case you have 'hostNetwork: true'.
+     # By default, while using host network, name resolution uses the host's DNS. If you wish nginx-controller
+     # to keep resolving names inside the k8s network, use ClusterFirstWithHostNet.
+     dnsPolicy: ClusterFirstWithHostNet
+     # dnsPolicy: ClusterFirst
+   ```
+
+4. 修改网络类型为ClusterIP
+
+   ```yaml
+   controller:
+     service:
+       # type: LoadBalancer
+       type: ClusterIP
+   ```
+
+5. 开启镜像地址不安全访问，不验证证书。（为了能成功下载第一步修改的image国内镜像）
+
+   ```bash
+   controller:
+     admissionWebhooks:
+       ## Additional annotations to the admission webhooks.
+       ## These annotations will be added to the ValidatingWebhookConfiguration and
+       ## the Jobs Spec of the admission webhooks.
+       enabled: false
+       # enabled: true
+   ```
+
+### 18.1.5 创建NameSpace
+
+为ingress-nginx单独创建一个命名空间，为了进行逻辑区分
+
+```bash
+$kubectl create ns ingress-nginx
+$kubectl get ns
+```
+
+### 18.1.6 给Node节点打上label标签
+
+> 不推荐给master节点打上，因为一般不推荐将自己的服务放在master节点上运行。会产生污点，即不会自动创建该DaemonSet的Pod（后面讲）
+
+```bash
+$kubectl label no k8s-node2 ingress=true
+$kubectl get no --show-labels|grep ingress
+```
+
+### 18.1.7 安装ingress
+
+开始安装ingress-nginx
+
+```bash
+# 一定要进入先进入ingress-nginx配置文件即（values.yaml所在的文件夹下）
+$ cd ~/download/ingress/ingress-nginx
+$ helm install ingress-nginx -n ingress-nginx .  #最后有个点，表示在当前路径查找配置文件 values.yaml
+```
+
+![image-20241010152931156](./_media/image-20241010152931156.png)
+
+### 18.1.8 验证
+
+```bash
+$ kubectl get pod -n ingress-nginx
+NAME                             READY   STATUS    RESTARTS   AGE
+ingress-nginx-controller-n662s   1/1     Running   0          3m45s
+
+# 默认ingress-nginx会占用Node节点的80和443端口，所有要确保Node节点的80和443端口空闲
+$ kubectl get svc,ep -n ingress-nginx
+NAME                               TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE
+service/ingress-nginx-controller   ClusterIP   10.108.180.122   <none>        80/TCP,443/TCP   29m
+
+NAME                                 ENDPOINTS                                AGE
+endpoints/ingress-nginx-controller   192.168.136.153:443,192.168.136.153:80   29m
+```
+
+### 18.1.9 ingress-nginx的values.yaml配置文件
+
+`values.yaml`完整配置文件如下：
+
+```yaml
+## nginx configuration
+## Ref: https://github.com/kubernetes/ingress-nginx/blob/main/docs/user-guide/nginx-configuration/index.md
+##
+
+## Overrides for generated resource names
+# See templates/_helpers.tpl
+# nameOverride:
+# fullnameOverride:
+
+## Labels to apply to all resources
+##
+commonLabels: {}
+# scmhash: abc123
+# myLabel: aakkmd
+
+controller:
+  name: controller
+  image:
+    ## Keep false as default for now!
+    chroot: false
+    # registry: registry.k8s.io
+    registry: 192.168.31.79:5000
+    # image: ingress-nginx/controller
+    image: dyrnq/ingress-nginx-controller
+    ## for backwards compatibility consider setting the full image url via the repository value below
+    ## use *either* current default registry/image or repository format or installing chart by providing the values.yaml will fail
+    ## repository:
+    tag: "v1.5.1"
+    #digest: sha256:4ba73c697770664c1e00e9f968de14e08f606ff961c76e5d7033a4a9c593c629
+    #digestChroot: sha256:c1c091b88a6c936a83bd7b098662760a87868d12452529bad0d178fb36147345
+    pullPolicy: IfNotPresent
+    # www-data -> uid 101
+    runAsUser: 101
+    allowPrivilegeEscalation: true
+
+  # -- Use an existing PSP instead of creating one
+  existingPsp: ""
+
+  # -- Configures the controller container name
+  containerName: controller
+
+  # -- Configures the ports that the nginx-controller listens on
+  containerPort:
+    http: 80
+    https: 443
+
+  # -- Will add custom configuration options to Nginx https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/
+  config: {}
+
+  # -- Annotations to be added to the controller config configuration configmap.
+  configAnnotations: {}
+
+  # -- Will add custom headers before sending traffic to backends according to https://github.com/kubernetes/ingress-nginx/tree/main/docs/examples/customization/custom-headers
+  proxySetHeaders: {}
+
+  # -- Will add custom headers before sending response traffic to the client according to: https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#add-headers
+  addHeaders: {}
+
+  # -- Optionally customize the pod dnsConfig.
+  dnsConfig: {}
+
+  # -- Optionally customize the pod hostname.
+  hostname: {}
+
+  # -- Optionally change this to ClusterFirstWithHostNet in case you have 'hostNetwork: true'.
+  # By default, while using host network, name resolution uses the host's DNS. If you wish nginx-controller
+  # to keep resolving names inside the k8s network, use ClusterFirstWithHostNet.
+  # dnsPolicy: ClusterFirst
+  dnsPolicy: ClusterFirstWithHostNet
+
+  # -- Bare-metal considerations via the host network https://kubernetes.github.io/ingress-nginx/deploy/baremetal/#via-the-host-network
+  # Ingress status was blank because there is no Service exposing the NGINX Ingress controller in a configuration using the host network, the default --publish-service flag used in standard cloud setups does not apply
+  reportNodeInternalIp: false
+
+  # -- Process Ingress objects without ingressClass annotation/ingressClassName field
+  # Overrides value for --watch-ingress-without-class flag of the controller binary
+  # Defaults to false
+  watchIngressWithoutClass: false
+
+  # -- Process IngressClass per name (additionally as per spec.controller).
+  ingressClassByName: false
+
+  # -- This configuration defines if Ingress Controller should allow users to set
+  # their own *-snippet annotations, otherwise this is forbidden / dropped
+  # when users add those annotations.
+  # Global snippets in ConfigMap are still respected
+  allowSnippetAnnotations: true
+
+  # -- Required for use with CNI based kubernetes installations (such as ones set up by kubeadm),
+  # since CNI and hostport don't mix yet. Can be deprecated once https://github.com/kubernetes/kubernetes/issues/23920
+  # is merged
+  # hostNetwork: false
+  hostNetwork: true
+
+  ## Use host ports 80 and 443
+  ## Disabled by default
+  hostPort:
+    # -- Enable 'hostPort' or not
+    enabled: false
+    ports:
+      # -- 'hostPort' http port
+      http: 80
+      # -- 'hostPort' https port
+      https: 443
+
+  # -- Election ID to use for status update, by default it uses the controller name combined with a suffix of 'leader'
+  electionID: ""
+
+  ## This section refers to the creation of the IngressClass resource
+  ## IngressClass resources are supported since k8s >= 1.18 and required since k8s >= 1.19
+  ingressClassResource:
+    # -- Name of the ingressClass
+    name: nginx
+    # -- Is this ingressClass enabled or not
+    enabled: true
+    # -- Is this the default ingressClass for the cluster
+    default: false
+    # -- Controller-value of the controller that is processing this ingressClass
+    controllerValue: "k8s.io/ingress-nginx"
+
+    # -- Parameters is a link to a custom resource containing additional
+    # configuration for the controller. This is optional if the controller
+    # does not require extra parameters.
+    parameters: {}
+
+  # -- For backwards compatibility with ingress.class annotation, use ingressClass.
+  # Algorithm is as follows, first ingressClassName is considered, if not present, controller looks for ingress.class annotation
+  ingressClass: nginx
+
+  # -- Labels to add to the pod container metadata
+  podLabels: {}
+  #  key: value
+
+  # -- Security Context policies for controller pods
+  podSecurityContext: {}
+
+  # -- See https://kubernetes.io/docs/tasks/administer-cluster/sysctl-cluster/ for notes on enabling and using sysctls
+  sysctls: {}
+  # sysctls:
+  #   "net.core.somaxconn": "8192"
+
+  # -- Allows customization of the source of the IP address or FQDN to report
+  # in the ingress status field. By default, it reads the information provided
+  # by the service. If disable, the status field reports the IP address of the
+  # node or nodes where an ingress controller pod is running.
+  publishService:
+    # -- Enable 'publishService' or not
+    enabled: true
+    # -- Allows overriding of the publish service to bind to
+    # Must be <namespace>/<service_name>
+    pathOverride: ""
+
+  # Limit the scope of the controller to a specific namespace
+  scope:
+    # -- Enable 'scope' or not
+    enabled: false
+    # -- Namespace to limit the controller to; defaults to $(POD_NAMESPACE)
+    namespace: ""
+    # -- When scope.enabled == false, instead of watching all namespaces, we watching namespaces whose labels
+    # only match with namespaceSelector. Format like foo=bar. Defaults to empty, means watching all namespaces.
+    namespaceSelector: ""
+
+  # -- Allows customization of the configmap / nginx-configmap namespace; defaults to $(POD_NAMESPACE)
+  configMapNamespace: ""
+
+  tcp:
+    # -- Allows customization of the tcp-services-configmap; defaults to $(POD_NAMESPACE)
+    configMapNamespace: ""
+    # -- Annotations to be added to the tcp config configmap
+    annotations: {}
+
+  udp:
+    # -- Allows customization of the udp-services-configmap; defaults to $(POD_NAMESPACE)
+    configMapNamespace: ""
+    # -- Annotations to be added to the udp config configmap
+    annotations: {}
+
+  # -- Maxmind license key to download GeoLite2 Databases.
+  ## https://blog.maxmind.com/2019/12/18/significant-changes-to-accessing-and-using-geolite2-databases
+  maxmindLicenseKey: ""
+
+  # -- Additional command line arguments to pass to nginx-ingress-controller
+  # E.g. to specify the default SSL certificate you can use
+  extraArgs: {}
+  ## extraArgs:
+  ##   default-ssl-certificate: "<namespace>/<secret_name>"
+
+  # -- Additional environment variables to set
+  extraEnvs: []
+  # extraEnvs:
+  #   - name: FOO
+  #     valueFrom:
+  #       secretKeyRef:
+  #         key: FOO
+  #         name: secret-resource
+
+  # -- Use a `DaemonSet` or `Deployment`
+  # kind: Deployment
+  kind: DaemonSet
+  # -- Annotations to be added to the controller Deployment or DaemonSet
+  ##
+  annotations: {}
+  #  keel.sh/pollSchedule: "@every 60m"
+
+  # -- Labels to be added to the controller Deployment or DaemonSet and other resources that do not have option to specify labels
+  ##
+  labels: {}
+  #  keel.sh/policy: patch
+  #  keel.sh/trigger: poll
+
+
+  # -- The update strategy to apply to the Deployment or DaemonSet
+  ##
+  updateStrategy: {}
+  #  rollingUpdate:
+  #    maxUnavailable: 1
+  #  type: RollingUpdate
+
+  # -- `minReadySeconds` to avoid killing pods before we are ready
+  ##
+  minReadySeconds: 0
+
+
+  # -- Node tolerations for server scheduling to nodes with taints
+  ## Ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+  ##
+  tolerations: []
+  #  - key: "key"
+  #    operator: "Equal|Exists"
+  #    value: "value"
+  #    effect: "NoSchedule|PreferNoSchedule|NoExecute(1.6 only)"
+
+  # -- Affinity and anti-affinity rules for server scheduling to nodes
+  ## Ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
+  ##
+  affinity: {}
+    # # An example of preferred pod anti-affinity, weight is in the range 1-100
+    # podAntiAffinity:
+    #   preferredDuringSchedulingIgnoredDuringExecution:
+    #   - weight: 100
+    #     podAffinityTerm:
+    #       labelSelector:
+    #         matchExpressions:
+    #         - key: app.kubernetes.io/name
+    #           operator: In
+    #           values:
+    #           - ingress-nginx
+    #         - key: app.kubernetes.io/instance
+    #           operator: In
+    #           values:
+    #           - ingress-nginx
+    #         - key: app.kubernetes.io/component
+    #           operator: In
+    #           values:
+    #           - controller
+    #       topologyKey: kubernetes.io/hostname
+
+    # # An example of required pod anti-affinity
+    # podAntiAffinity:
+    #   requiredDuringSchedulingIgnoredDuringExecution:
+    #   - labelSelector:
+    #       matchExpressions:
+    #       - key: app.kubernetes.io/name
+    #         operator: In
+    #         values:
+    #         - ingress-nginx
+    #       - key: app.kubernetes.io/instance
+    #         operator: In
+    #         values:
+    #         - ingress-nginx
+    #       - key: app.kubernetes.io/component
+    #         operator: In
+    #         values:
+    #         - controller
+    #     topologyKey: "kubernetes.io/hostname"
+
+  # -- Topology spread constraints rely on node labels to identify the topology domain(s) that each Node is in.
+  ## Ref: https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
+  ##
+  topologySpreadConstraints: []
+    # - maxSkew: 1
+    #   topologyKey: topology.kubernetes.io/zone
+    #   whenUnsatisfiable: DoNotSchedule
+    #   labelSelector:
+    #     matchLabels:
+    #       app.kubernetes.io/instance: ingress-nginx-internal
+
+  # -- `terminationGracePeriodSeconds` to avoid killing pods before we are ready
+  ## wait up to five minutes for the drain of connections
+  ##
+  terminationGracePeriodSeconds: 300
+
+  # -- Node labels for controller pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector:
+    kubernetes.io/os: linux
+    ingress: "true"
+
+  ## Liveness and readiness probe values
+  ## Ref: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-probes
+  ##
+  ## startupProbe:
+  ##   httpGet:
+  ##     # should match container.healthCheckPath
+  ##     path: "/healthz"
+  ##     port: 10254
+  ##     scheme: HTTP
+  ##   initialDelaySeconds: 5
+  ##   periodSeconds: 5
+  ##   timeoutSeconds: 2
+  ##   successThreshold: 1
+  ##   failureThreshold: 5
+  livenessProbe:
+    httpGet:
+      # should match container.healthCheckPath
+      path: "/healthz"
+      port: 10254
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 5
+  readinessProbe:
+    httpGet:
+      # should match container.healthCheckPath
+      path: "/healthz"
+      port: 10254
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+
+
+  # -- Path of the health check endpoint. All requests received on the port defined by
+  # the healthz-port parameter are forwarded internally to this path.
+  healthCheckPath: "/healthz"
+
+  # -- Address to bind the health check endpoint.
+  # It is better to set this option to the internal node address
+  # if the ingress nginx controller is running in the `hostNetwork: true` mode.
+  healthCheckHost: ""
+
+  # -- Annotations to be added to controller pods
+  ##
+  podAnnotations: {}
+
+  replicaCount: 1
+
+  # -- Define either 'minAvailable' or 'maxUnavailable', never both.
+  minAvailable: 1
+  # -- Define either 'minAvailable' or 'maxUnavailable', never both.
+  # maxUnavailable: 1
+
+  ## Define requests resources to avoid probe issues due to CPU utilization in busy nodes
+  ## ref: https://github.com/kubernetes/ingress-nginx/issues/4735#issuecomment-551204903
+  ## Ideally, there should be no limits.
+  ## https://engineering.indeedblog.com/blog/2019/12/cpu-throttling-regression-fix/
+  resources:
+  ##  limits:
+  ##    cpu: 100m
+  ##    memory: 90Mi
+    requests:
+      cpu: 100m
+      memory: 90Mi
+
+  # Mutually exclusive with keda autoscaling
+  autoscaling:
+    apiVersion: autoscaling/v2
+    enabled: false
+    annotations: {}
+    minReplicas: 1
+    maxReplicas: 11
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 50
+    behavior: {}
+      # scaleDown:
+      #   stabilizationWindowSeconds: 300
+      #   policies:
+      #   - type: Pods
+      #     value: 1
+      #     periodSeconds: 180
+      # scaleUp:
+      #   stabilizationWindowSeconds: 300
+      #   policies:
+      #   - type: Pods
+      #     value: 2
+      #     periodSeconds: 60
+
+  autoscalingTemplate: []
+  # Custom or additional autoscaling metrics
+  # ref: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#support-for-custom-metrics
+  # - type: Pods
+  #   pods:
+  #     metric:
+  #       name: nginx_ingress_controller_nginx_process_requests_total
+  #     target:
+  #       type: AverageValue
+  #       averageValue: 10000m
+
+  # Mutually exclusive with hpa autoscaling
+  keda:
+    apiVersion: "keda.sh/v1alpha1"
+    ## apiVersion changes with keda 1.x vs 2.x
+    ## 2.x = keda.sh/v1alpha1
+    ## 1.x = keda.k8s.io/v1alpha1
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 11
+    pollingInterval: 30
+    cooldownPeriod: 300
+    restoreToOriginalReplicaCount: false
+    scaledObject:
+      annotations: {}
+      # Custom annotations for ScaledObject resource
+      #  annotations:
+      # key: value
+    triggers: []
+ #     - type: prometheus
+ #       metadata:
+ #         serverAddress: http://<prometheus-host>:9090
+ #         metricName: http_requests_total
+ #         threshold: '100'
+ #         query: sum(rate(http_requests_total{deployment="my-deployment"}[2m]))
+
+    behavior: {}
+ #     scaleDown:
+ #       stabilizationWindowSeconds: 300
+ #       policies:
+ #       - type: Pods
+ #         value: 1
+ #         periodSeconds: 180
+ #     scaleUp:
+ #       stabilizationWindowSeconds: 300
+ #       policies:
+ #       - type: Pods
+ #         value: 2
+ #         periodSeconds: 60
+
+  # -- Enable mimalloc as a drop-in replacement for malloc.
+  ## ref: https://github.com/microsoft/mimalloc
+  ##
+  enableMimalloc: true
+
+  ## Override NGINX template
+  customTemplate:
+    configMapName: ""
+    configMapKey: ""
+
+  service:
+    enabled: true
+
+    # -- If enabled is adding an appProtocol option for Kubernetes service. An appProtocol field replacing annotations that were
+    # using for setting a backend protocol. Here is an example for AWS: service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+    # It allows choosing the protocol for each backend specified in the Kubernetes service.
+    # See the following GitHub issue for more details about the purpose: https://github.com/kubernetes/kubernetes/issues/40244
+    # Will be ignored for Kubernetes versions older than 1.20
+    ##
+    appProtocol: true
+
+    annotations: {}
+    labels: {}
+    # clusterIP: ""
+
+    # -- List of IP addresses at which the controller services are available
+    ## Ref: https://kubernetes.io/docs/user-guide/services/#external-ips
+    ##
+    externalIPs: []
+
+    # -- Used by cloud providers to connect the resulting `LoadBalancer` to a pre-existing static IP according to https://kubernetes.io/docs/concepts/services-networking/service/#loadbalancer
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+
+    enableHttp: true
+    enableHttps: true
+
+    ## Set external traffic policy to: "Local" to preserve source IP on providers supporting it.
+    ## Ref: https://kubernetes.io/docs/tutorials/services/source-ip/#source-ip-for-services-with-typeloadbalancer
+    # externalTrafficPolicy: ""
+
+    ## Must be either "None" or "ClientIP" if set. Kubernetes will default to "None".
+    ## Ref: https://kubernetes.io/docs/concepts/services-networking/service/#virtual-ips-and-service-proxies
+    # sessionAffinity: ""
+
+    ## Specifies the health check node port (numeric port number) for the service. If healthCheckNodePort isn’t specified,
+    ## the service controller allocates a port from your cluster’s NodePort range.
+    ## Ref: https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/#preserving-the-client-source-ip
+    # healthCheckNodePort: 0
+
+    # -- Represents the dual-stack-ness requested or required by this Service. Possible values are
+    # SingleStack, PreferDualStack or RequireDualStack.
+    # The ipFamilies and clusterIPs fields depend on the value of this field.
+    ## Ref: https://kubernetes.io/docs/concepts/services-networking/dual-stack/
+    ipFamilyPolicy: "SingleStack"
+
+    # -- List of IP families (e.g. IPv4, IPv6) assigned to the service. This field is usually assigned automatically
+    # based on cluster configuration and the ipFamilyPolicy field.
+    ## Ref: https://kubernetes.io/docs/concepts/services-networking/dual-stack/
+    ipFamilies:
+      - IPv4
+
+    ports:
+      http: 80
+      https: 443
+
+    targetPorts:
+      http: http
+      https: https
+
+    # type: LoadBalancer
+    type: ClusterIP
+
+    ## type: NodePort
+    ## nodePorts:
+    ##   http: 32080
+    ##   https: 32443
+    ##   tcp:
+    ##     8080: 32808
+    nodePorts:
+      http: ""
+      https: ""
+      tcp: {}
+      udp: {}
+
+    external:
+      enabled: true
+
+    internal:
+      # -- Enables an additional internal load balancer (besides the external one).
+      enabled: false
+      # -- Annotations are mandatory for the load balancer to come up. Varies with the cloud service.
+      annotations: {}
+
+      # loadBalancerIP: ""
+
+      # -- Restrict access For LoadBalancer service. Defaults to 0.0.0.0/0.
+      loadBalancerSourceRanges: []
+
+      ## Set external traffic policy to: "Local" to preserve source IP on
+      ## providers supporting it
+      ## Ref: https://kubernetes.io/docs/tutorials/services/source-ip/#source-ip-for-services-with-typeloadbalancer
+      # externalTrafficPolicy: ""
+
+  # shareProcessNamespace enables process namespace sharing within the pod.
+  # This can be used for example to signal log rotation using `kill -USR1` from a sidecar.
+  shareProcessNamespace: false
+
+  # -- Additional containers to be added to the controller pod.
+  # See https://github.com/lemonldap-ng-controller/lemonldap-ng-controller as example.
+  extraContainers: []
+  #  - name: my-sidecar
+  #    image: nginx:latest
+  #  - name: lemonldap-ng-controller
+  #    image: lemonldapng/lemonldap-ng-controller:0.2.0
+  #    args:
+  #      - /lemonldap-ng-controller
+  #      - --alsologtostderr
+  #      - --configmap=$(POD_NAMESPACE)/lemonldap-ng-configuration
+  #    env:
+  #      - name: POD_NAME
+  #        valueFrom:
+  #          fieldRef:
+  #            fieldPath: metadata.name
+  #      - name: POD_NAMESPACE
+  #        valueFrom:
+  #          fieldRef:
+  #            fieldPath: metadata.namespace
+  #    volumeMounts:
+  #    - name: copy-portal-skins
+  #      mountPath: /srv/var/lib/lemonldap-ng/portal/skins
+
+  # -- Additional volumeMounts to the controller main container.
+  extraVolumeMounts: []
+  #  - name: copy-portal-skins
+  #   mountPath: /var/lib/lemonldap-ng/portal/skins
+
+  # -- Additional volumes to the controller pod.
+  extraVolumes: []
+  #  - name: copy-portal-skins
+  #    emptyDir: {}
+
+  # -- Containers, which are run before the app containers are started.
+  extraInitContainers: []
+  # - name: init-myservice
+  #   image: busybox
+  #   command: ['sh', '-c', 'until nslookup myservice; do echo waiting for myservice; sleep 2; done;']
+
+  # -- Modules, which are mounted into the core nginx image. See values.yaml for a sample to add opentelemetry module
+  extraModules: []
+  #   containerSecurityContext:
+  #     allowPrivilegeEscalation: false
+  #
+  # The image must contain a `/usr/local/bin/init_module.sh` executable, which
+  # will be executed as initContainers, to move its config files within the
+  # mounted volume.
+
+  opentelemetry:
+    enabled: false
+    # image: registry.k8s.io/ingress-nginx/opentelemetry:v20221114-controller-v1.5.1-6-ga66ee73c5@sha256:41076fd9fb4255677c1a3da1ac3fc41477f06eba3c7ebf37ffc8f734dad51d7c
+    image: 192.168.31.79:5000/ingress-nginx/opentelemetry:v20221114-controller-v1.5.1-6-ga66ee73c5
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+
+  admissionWebhooks:
+    annotations: {}
+    # ignore-check.kube-linter.io/no-read-only-rootfs: "This deployment needs write access to root filesystem".
+
+    ## Additional annotations to the admission webhooks.
+    ## These annotations will be added to the ValidatingWebhookConfiguration and
+    ## the Jobs Spec of the admission webhooks.
+    # enabled: true
+    enabled: false
+    # -- Additional environment variables to set
+    extraEnvs: []
+    # extraEnvs:
+    #   - name: FOO
+    #     valueFrom:
+    #       secretKeyRef:
+    #         key: FOO
+    #         name: secret-resource
+    # -- Admission Webhook failure policy to use
+    failurePolicy: Fail
+    # timeoutSeconds: 10
+    port: 8443
+    certificate: "/usr/local/certificates/cert"
+    key: "/usr/local/certificates/key"
+    namespaceSelector: {}
+    objectSelector: {}
+    # -- Labels to be added to admission webhooks
+    labels: {}
+
+    # -- Use an existing PSP instead of creating one
+    existingPsp: ""
+    networkPolicyEnabled: false
+
+    service:
+      annotations: {}
+      # clusterIP: ""
+      externalIPs: []
+      # loadBalancerIP: ""
+      loadBalancerSourceRanges: []
+      servicePort: 443
+      type: ClusterIP
+
+    createSecretJob:
+      securityContext:
+        allowPrivilegeEscalation: false
+      resources: {}
+        # limits:
+        #   cpu: 10m
+        #   memory: 20Mi
+        # requests:
+        #   cpu: 10m
+        #   memory: 20Mi
+
+    patchWebhookJob:
+      securityContext:
+        allowPrivilegeEscalation: false
+      resources: {}
+
+    patch:
+      enabled: true
+      image:
+        registry: 192.168.31.79:5000
+        # registry: registry.k8s.io
+        # image: ingress-nginx/kube-webhook-certgen
+        image: dyrnq/kube-webhook-certgen
+        ## for backwards compatibility consider setting the full image url via the repository value below
+        ## use *either* current default registry/image or repository format or installing chart by providing the values.yaml will fail
+        ## repository:
+        tag: v20220916-gd32f8c343
+        #digest: sha256:39c5b2e3310dc4264d638ad28d9d1d96c4cbb2b2dcfb52368fe4e3c63f61e10f
+        pullPolicy: IfNotPresent
+      # -- Provide a priority class name to the webhook patching job
+      ##
+      priorityClassName: ""
+      podAnnotations: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations: []
+      # -- Labels to be added to patch job resources
+      labels: {}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        fsGroup: 2000
+
+    # Use certmanager to generate webhook certs
+    certManager:
+      enabled: false
+      # self-signed root certificate
+      rootCert:
+        duration: ""  # default to be 5y
+      admissionCert:
+        duration: ""  # default to be 1y
+      # issuerRef:
+      #   name: "issuer"
+      #   kind: "ClusterIssuer"
+
+  metrics:
+    port: 10254
+    portName: metrics
+    # if this port is changed, change healthz-port: in extraArgs: accordingly
+    enabled: false
+
+    service:
+      annotations: {}
+      # prometheus.io/scrape: "true"
+      # prometheus.io/port: "10254"
+
+      # clusterIP: ""
+
+      # -- List of IP addresses at which the stats-exporter service is available
+      ## Ref: https://kubernetes.io/docs/user-guide/services/#external-ips
+      ##
+      externalIPs: []
+
+      # loadBalancerIP: ""
+      loadBalancerSourceRanges: []
+      servicePort: 10254
+      type: ClusterIP
+      # externalTrafficPolicy: ""
+      # nodePort: ""
+
+    serviceMonitor:
+      enabled: false
+      additionalLabels: {}
+      ## The label to use to retrieve the job name from.
+      ## jobLabel: "app.kubernetes.io/name"
+      namespace: ""
+      namespaceSelector: {}
+      ## Default: scrape .Release.Namespace only
+      ## To scrape all, use the following:
+      ## namespaceSelector:
+      ##   any: true
+      scrapeInterval: 30s
+      # honorLabels: true
+      targetLabels: []
+      relabelings: []
+      metricRelabelings: []
+
+    prometheusRule:
+      enabled: false
+      additionalLabels: {}
+      # namespace: ""
+      rules: []
+        # # These are just examples rules, please adapt them to your needs
+        # - alert: NGINXConfigFailed
+        #   expr: count(nginx_ingress_controller_config_last_reload_successful == 0) > 0
+        #   for: 1s
+        #   labels:
+        #     severity: critical
+        #   annotations:
+        #     description: bad ingress config - nginx config test failed
+        #     summary: uninstall the latest ingress changes to allow config reloads to resume
+        # - alert: NGINXCertificateExpiry
+        #   expr: (avg(nginx_ingress_controller_ssl_expire_time_seconds) by (host) - time()) < 604800
+        #   for: 1s
+        #   labels:
+        #     severity: critical
+        #   annotations:
+        #     description: ssl certificate(s) will expire in less then a week
+        #     summary: renew expiring certificates to avoid downtime
+        # - alert: NGINXTooMany500s
+        #   expr: 100 * ( sum( nginx_ingress_controller_requests{status=~"5.+"} ) / sum(nginx_ingress_controller_requests) ) > 5
+        #   for: 1m
+        #   labels:
+        #     severity: warning
+        #   annotations:
+        #     description: Too many 5XXs
+        #     summary: More than 5% of all requests returned 5XX, this requires your attention
+        # - alert: NGINXTooMany400s
+        #   expr: 100 * ( sum( nginx_ingress_controller_requests{status=~"4.+"} ) / sum(nginx_ingress_controller_requests) ) > 5
+        #   for: 1m
+        #   labels:
+        #     severity: warning
+        #   annotations:
+        #     description: Too many 4XXs
+        #     summary: More than 5% of all requests returned 4XX, this requires your attention
+
+  # -- Improve connection draining when ingress controller pod is deleted using a lifecycle hook:
+  # With this new hook, we increased the default terminationGracePeriodSeconds from 30 seconds
+  # to 300, allowing the draining of connections up to five minutes.
+  # If the active connections end before that, the pod will terminate gracefully at that time.
+  # To effectively take advantage of this feature, the Configmap feature
+  # worker-shutdown-timeout new value is 240s instead of 10s.
+  ##
+  lifecycle:
+    preStop:
+      exec:
+        command:
+          - /wait-shutdown
+
+  priorityClassName: ""
+
+# -- Rollback limit
+##
+revisionHistoryLimit: 10
+
+## Default 404 backend
+##
+defaultBackend:
+  ##
+  enabled: false
+
+  name: defaultbackend
+  image:
+    registry: 192.168.31.79:5000
+    # registry: registry.k8s.io
+    # image: defaultbackend-amd64
+    image: dyrnq/defaultbackend-amd64
+    ## for backwards compatibility consider setting the full image url via the repository value below
+    ## use *either* current default registry/image or repository format or installing chart by providing the values.yaml will fail
+    ## repository:
+    tag: "1.5"
+    pullPolicy: IfNotPresent
+    # nobody user -> uid 65534
+    runAsUser: 65534
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+  # -- Use an existing PSP instead of creating one
+  existingPsp: ""
+
+  extraArgs: {}
+
+  serviceAccount:
+    create: true
+    name: ""
+    automountServiceAccountToken: true
+  # -- Additional environment variables to set for defaultBackend pods
+  extraEnvs: []
+
+  port: 8080
+
+  ## Readiness and liveness probes for default backend
+  ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+  ##
+  livenessProbe:
+    failureThreshold: 3
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 6
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    successThreshold: 1
+    timeoutSeconds: 5
+
+  # -- Node tolerations for server scheduling to nodes with taints
+  ## Ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+  ##
+  tolerations: []
+  #  - key: "key"
+  #    operator: "Equal|Exists"
+  #    value: "value"
+  #    effect: "NoSchedule|PreferNoSchedule|NoExecute(1.6 only)"
+
+  affinity: {}
+
+  # -- Security Context policies for controller pods
+  # See https://kubernetes.io/docs/tasks/administer-cluster/sysctl-cluster/ for
+  # notes on enabling and using sysctls
+  ##
+  podSecurityContext: {}
+
+  # -- Security Context policies for controller main container.
+  # See https://kubernetes.io/docs/tasks/administer-cluster/sysctl-cluster/ for
+  # notes on enabling and using sysctls
+  ##
+  containerSecurityContext: {}
+
+  # -- Labels to add to the pod container metadata
+  podLabels: {}
+  #  key: value
+
+  # -- Node labels for default backend pod assignment
+  ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
+  ##
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  # -- Annotations to be added to default backend pods
+  ##
+  podAnnotations: {}
+
+  replicaCount: 1
+
+  minAvailable: 1
+
+  resources: {}
+  # limits:
+  #   cpu: 10m
+  #   memory: 20Mi
+  # requests:
+  #   cpu: 10m
+  #   memory: 20Mi
+
+  extraVolumeMounts: []
+  ## Additional volumeMounts to the default backend container.
+  #  - name: copy-portal-skins
+  #   mountPath: /var/lib/lemonldap-ng/portal/skins
+
+  extraVolumes: []
+  ## Additional volumes to the default backend pod.
+  #  - name: copy-portal-skins
+  #    emptyDir: {}
+
+  autoscaling:
+    annotations: {}
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 50
+
+  service:
+    annotations: {}
+
+    # clusterIP: ""
+
+    # -- List of IP addresses at which the default backend service is available
+    ## Ref: https://kubernetes.io/docs/user-guide/services/#external-ips
+    ##
+    externalIPs: []
+
+    # loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    servicePort: 80
+    type: ClusterIP
+
+  priorityClassName: ""
+  # -- Labels to be added to the default backend resources
+  labels: {}
+
+## Enable RBAC as per https://github.com/kubernetes/ingress-nginx/blob/main/docs/deploy/rbac.md and https://github.com/kubernetes/ingress-nginx/issues/266
+rbac:
+  create: true
+  scope: false
+
+## If true, create & use Pod Security Policy resources
+## https://kubernetes.io/docs/concepts/policy/pod-security-policy/
+podSecurityPolicy:
+  enabled: false
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: true
+  # -- Annotations for the controller service account
+  annotations: {}
+
+# -- Optional array of imagePullSecrets containing private registry credentials
+## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# - name: secretName
+
+# -- TCP service key-value pairs
+## Ref: https://github.com/kubernetes/ingress-nginx/blob/main/docs/user-guide/exposing-tcp-udp-services.md
+##
+tcp: {}
+#  8080: "default/example-tcp-svc:9000"
+
+# -- UDP service key-value pairs
+## Ref: https://github.com/kubernetes/ingress-nginx/blob/main/docs/user-guide/exposing-tcp-udp-services.md
+##
+udp: {}
+#  53: "kube-system/kube-dns:53"
+
+# -- Prefix for TCP and UDP ports names in ingress controller service
+## Some cloud providers, like Yandex Cloud may have a requirements for a port name regex to support cloud load balancer integration
+portNamePrefix: ""
+
+# -- (string) A base64-encoded Diffie-Hellman parameter.
+# This can be generated with: `openssl dhparam 4096 2> /dev/null | base64`
+## Ref: https://github.com/kubernetes/ingress-nginx/tree/main/docs/examples/customization/ssl-dh-param
+dhParam:
+
+```
+
+## 18.2 使用ingress
+
+> 前提：必须先安装ingress-nginx否则使用直接创建ingress资源是无效的
+
