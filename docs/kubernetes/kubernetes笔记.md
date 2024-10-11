@@ -3351,7 +3351,15 @@ ipvs  支持三种负载均衡模式：DR模式（Direct Routing）、NAT 模式
 
 Ingress 不会随意公开端口或协议。 将 HTTP 和 HTTPS 以外的服务开放到 Internet 时，通常使用 [Service.Type=NodePort](https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/#type-nodeport) 或 [Service.Type=LoadBalancer](https://kubernetes.io/zh-cn/docs/concepts/services-networking/service/#loadbalancer) 类型的 Service。
 
-
+> **ingress控制器实际就是Pod+service，所以如果想确认ingress控制器地址直接查看其Pod配置文件或svc,ep**（当然Pod容器中可以使用`service名.命名空间进行访问`）
+>
+> ```bash
+> # 注意容器内要走ingress转发必须加上Ingress配置文件中rules中的host (一般不会这么用，集群中直接service访问就好不会再走ingress控制器，全做了解)
+> # 1.进入容器
+> $ kubectl exec -it centos -c centos -- bash
+> # 2.容器中模拟转发 必须加上rules有的Host域名地址当作请求头
+> \# curl -H "Host: foo.com" ingress-nginx-controller.ingress-nginx # 访问ingress访问,必须改Host为rules中规则才会转发
+> ```
 
 ## 18.0 api文档
 
@@ -4580,7 +4588,270 @@ dhParam:
 
 ```
 
-## 18.2 使用ingress
+## 18.2 基于ingress服务的访问流程
+
+![image-20241011102218390](./_media/image-20241011102218390.png)
+
+**相比于传统部署方案,使用ingress的访问流程如下:**
+
+1. 用户发起请求（如examle.com,api.example.com等等）,进入负载均衡器中（**可以是k8s外部的也可以是基于第三方云的**）。
+2. 负载均衡器根据规则，将服务转发到Ingress控制器（如ingress-nginx,ingress-haproxy等等）
+3. 配置自己创建的`Ingress`资源（yaml配置文件），进行对应规则匹配，转发到对应的service上
+4. 下面就走service的具体配置。
+   + 如走外部服务ExternalName
+   + 如走内部ClusterIP
+   + 如走内部NodePort
+   + 如走Headless Service
+   + 等等
+
+> + 可以将**Ingress控制器理解为一个nginx服务器**，同样需要占用（监听）端口。
+> + **在k8s中Ingress控制器具体以什么样资源（Deployment，DaemonSet）运行，还是以什么方式公开（ClusterIP，NodePort）取决于你创建Ingress控制器时的配置文件**（如ingress-nginx就是以DaemonSet，ClusterIP方式公开）
+> + Ingress控制器实际底层就是一个Pod搭配service，**所以我们想访问ingress控制器只需要看其yaml配置文件占用什么端口，是否占用主机端口（依赖service公开方式）**
+
+## 18.3 简单使用ingress
 
 > 前提：必须先安装ingress-nginx否则使用直接创建ingress资源是无效的
 
+### 18.3.1 安装Ingress控制器
+
+以Ingress-nginx为例，具体安装步骤见[18.1 环境准备（安装ingress-nginx）](#18.1 环境准备（安装ingress-nginx）)
+
+### 18.3.2 创建deploy，并打上标签
+
+```bash
+$ kubectl get pod --show-labels
+NAME                            READY   STATUS    RESTARTS      AGE     LABELS
+centos                          1/1     Running   2 (13h ago)   38h     run=centos
+nginx-deploy-8655f46645-gvzqz   1/1     Running   1 (13h ago)   17h     app=nginx,pod-template-hash=8655f46645,target=ingress-1
+nginx-deploy-8655f46645-j5s64   1/1     Running   3 (13h ago)   2d20h   app=nginx,pod-template-hash=8655f46645,target=ingress-2
+nginx-deploy-8655f46645-thczz   1/1     Running   3 (13h ago)   2d19h   app=nginx,pod-template-hash=8655f46645,target=ingress-2
+```
+
+### 18.3.3 创建Ingress资源
+
++ 编写ingress配置文件`nginx-ingress.yaml`
+
+  ```yaml
+  # 用于创建ingress资源（前提k8s集群中已经存在ingress控制器）
+  # https://kubernetes.io/docs/concepts/services-networking/ingress/
+  apiVersion: networking.k8s.io/v1
+  kind: Ingress # 定义Ingress资源
+  metadata:
+    name: nginx-ingress # 该ingress资源名字
+    namespace: default
+    # https://kubernetes.github.io/ingress-nginx/examples/rewrite/
+    annotations:
+      #开启路径重写，和nginx完全一样 (支持/$1写法)
+      # / 表示 将匹配的路径如：/api/(.*) 改写 /
+      nginx.ingress.kubernetes.io/rewrite-target: /
+      # 表示路径匹配是否开启正则匹配
+      nginx.ingress.kubernetes.io/use-regex: "false" # 必须加引号
+      # 标识Ingress控制器为nginx(ingress-nginx) 必须写
+      # kubernetes.io/ingress.class: "nginx"
+  spec:
+    ingressClassName: "nginx" # 指明ingress使用的控制器为ingress-nginx（和kubernetes.io/ingress.class: "nginx"效果完全一样）
+    defaultBackend: # 没有匹配规则时的默认service(有rules时请求的域名必须在host中才行,如果是zoo.com就不会走defaultbackend,而是404)
+      service:
+        name: nginx-ingress-svc-externalname #重定向到该service
+        port:
+          number: 80 # service端口
+    rules:
+    - host: foo.com # 必须是域名，且不可以使用端口（默认是80和443），模拟生产服务地址,客户端通过改Hosts进行访问(可以把他当成baidu.com)
+      http:
+        paths:
+        - path: /api/(.*) # 匹配的路径
+          pathType: Prefix # 前缀匹配，还有Exact精确匹配、ImplementationSpecific使用IngressClass匹配
+          backend: # 映射到service
+            service: # 对应的service配置信息
+              name: nginx-ingress-svc-clusterip
+              port:
+                number: 80 # service端口
+        - path: /doc/(.*) # 匹配的路径
+          pathType: Prefix # 前缀匹配，还有Exact精确匹配、ImplementationSpecific使用IngressClass匹配
+          backend: # 映射到service
+            service: # 对应的service配置信息
+              name: nginx-ingress-svc-clusterip
+              port:
+                number: 80 # service端口
+    - host: '*.bar.com' # 必须是域名，且不可以使用端口（默认是80和443），模拟生产服务地址,客户端通过改Hosts进行访问(可以把他当成baidu.com)
+      http:
+        paths:
+        - path: /api/(.*) # 匹配的路径
+          pathType: Prefix # 前缀匹配，还有Exact精确匹配、ImplementationSpecific使用IngressClass匹配
+          backend: # 映射到service
+            service: # 对应的service配置信息
+              name: nginx-ingress-svc-nodeport
+              port:
+                name: ngx-nodeport-80 # service端口名字(不能超过16字符)。和port二选一即可
+  ---
+  ```
+
+  > 注意`ingressClassName: "nginx"`或`kubernetes.io/ingress.class: "nginx"`必须写一个，用于指定使用什么ingress控制器，否则不生效。
+
++ 创建ingress资源
+
+  ```bash
+  $ kuebctl apply -f nginx-ingress.yaml
+  ```
+
+  遇到的问题：
+
+  1. **yaml配置文件中布尔值true或false必须加引号**，如`nginx.ingress.kubernetes.io/use-regex: "false"`
+
+  2. **yaml配置文件中特殊符合必须加引号**，如`host: '*.bar.com'`
+
+  3. **注意Backend或DefaultBackend中结构**，如`service.port:80`是错的，因为port下面还是属性`service.port.number:80`
+
+  4. **写明使用的ingress控制器类型**，如`ingressClassName: "nginx"`。
+
+     ```bash
+     # 如果不指明ingress控制器类型，其Pod日志会提示“配置文件不生效，因为没有指明IngressClass”
+     kubectl logs -f ingress-nginx-controller-n662s -n ingress-nginx # 查看Pod日志
+     ```
+
++ 测试规则
+
+  如果时集群外机器，可以修改hosts文件，模拟官网服务（**一定要把代理关掉，或者代理中排除一些规则，改完hosts文件记得清除浏览器缓存**），如下：
+
+  ```bash
+  # Copyright (c) 1993-2009 Microsoft Corp.
+  #
+  # This is a sample HOSTS file used by Microsoft TCP/IP for Windows.
+  192.168.136.153 zoo.com
+  192.168.136.153 foo.com
+  192.168.136.153 bar.com
+  192.168.136.153 api.bar.com
+  192.168.136.153 test.bar.com
+  ```
+
+  + 测试`https//zoo.com`，ingress配置文件中**rules.host没有这个域名**，返回404
+  + 测试`http://foo.com`，ingress配置文件中**rules.host有这个域名，但是没有这个规则，走defaultbackend中nginx-ingress-svc-externalname服务**，返回http://httpbin.io的首页
+  + 测试`http://foo.com/api`，ingress配置文件中**rules.host有这个域名，但是没有这个规则，走defaultbackend中nginx-ingress-svc-externalname服务**，返回http://httpbin.io/api内容
+  + 测试`http://foo.com/api/[xxx]`，`[xx]`表示可选，ingress配置文件中**rules.host有这个域名，有这个规则，走nginx-ingress-svc-clusterip服务**，请求路径统一改写为`/`,即请求变为`http://nginx-ingress-svc-clusterip/`，返回Pod容器内容（多Pod轮询）。
+  + 测试`http://bar.com`，ingress配置文件中**rules.host没有这个域名**，返回404
+  + 测试`http://api.bar.com`，ingress配置文件中**rules.host有这个域名，但是没有这个规则，走defaultbackend中nginx-ingress-svc-externalname服务**，返回http://httpbin.io的首页
+  + 测试`http://api.bar.com/api`，ingress配置文件中**rules.host有这个域名，但是没有这个规则，走defaultbackend中nginx-ingress-svc-externalname服务**，返回http://httpbin.io/api内容
+  + 测试`http://api.bar.com/api/[xxx]`，`[xx]`表示可选，ingress配置文件中**rules.host有这个域名，有这个规则，走nginx-ingress-svc-nodeport服务**，请求路径统一改写为`/`,即请求变为`http://nginx-ingress-svc-nodeport/`，返回Pod容器内容（多Pod轮询）。
+  + ...
+
+  
+
+## 18.4 ingress规则
+
+1. `spec.ingressClassName`必须配置一个，表示你使用的是什么控制器（如ingress-nginx）即`IngressClass`。当然你也可以自己创建自己的ingress控制器即`IngerssClass`
+
+2. `sepc.defaultBackend`和`spec.rules`至少配置一个，否则都会返回404。（以ingress-nginx为例）
+
+3. **如果请求的请求头Header中Host（如bar.com）不在spec.rules.host[*]中也会返回404** （以ingress-nginx为例）
+
+4. **如果请求的请求头Header中Host（如bar.com）在spec.rules.host[*]中，但是请求路径与spec.rules.host.path没有匹配的，才会走defaultBackend中配置的服务** 
+
+5. **如果请求的请求头Header中Host（如bar.com）在spec.rules.host[*]中，且请求路径与spec.rules.host.path匹配，才会走该规则对应的服务** 
+
+6. 路径匹配有三种`Exact`,`Prefix`,`ImplementationSpecific`
+
+   + `Exact`要求path路径完全匹配
+   + `Prefix`要求path路径前缀匹配，以`/`作为分割。（例如 `/foo/bar` 匹配 `/foo/bar/baz`，但不匹配 `/foo/barbaz`）
+   + `ImplementationSpecific`路径匹配的解释权取决于`IngressClass`，即当前的Ingress控制器
+
+7. 以ingress-nginx控制器来说，path路径匹配和nginx完全一样
+
+   示例： https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress/#%E7%A4%BA%E4%BE%8B
+
+   + **路径path精度越高，越优先匹配**（如`/aa/bb`优先匹配`/aa/bb`而不是`/`）
+   + **混合类型的（Prefix和Exact同时使用），Exact优先级高**
+
+8. `spec.rules.host`必须是**域名**，且**支持通配符**，但是配置文件中必须使用引号包括起来。
+
+   如`*.bar.com` 匹配`api.test.com`，匹配`test.bar.com`但是**不匹配**`api.v1.bar.com`,`api.v1.test.bar.com`即一个`*`只能代替一级DNS，不能是多级。
+
+## 18.5 ==Ingress，IngressClass，IngressController三者关系==
+
++ **针对整个k8s集群**来说，`Ingress`是一种规范，定义了**外部接口访问内部服务的实现**（类似于docker,containerd和CRI）
++ **对于k8s集群内部，即集群资源来说**
+  + `Ingress`是一个**资源**，它定义了请求转发规则。必须搭配`IngressController`使用，但是`Ingress`不直接和`IngressController`关联，而是通过`IngressClass`进行关联。
+  + `IngressClass`也是一个**资源**，它定义了`Ingress`资源应该由哪个`IngressController`来处理。它是用来区分多个`IngressController`的
++ `IngressController`是k8s集群插件，**理论上不是其内部的资源，但是它又以pod的形式运行z在集群内**，比如ingress-nginx其实就是一个nginx，以Pod形式运行在Node节点上。
+
+### 18.5.1 Ingress资源
+
+就是我们自己定义的yaml配置文件（**path路径转发规则**）如`nginx-ingress.yaml`，搭配ingress-nginx（ingress控制器）使用
+
+```bash
+$ get ingress -A -o wide # 以yaml格式输出就是配置文件具体内容
+NAMESPACE   NAME            CLASS   HOSTS               ADDRESS          PORTS   AGE
+default     nginx-ingress   nginx   foo.com,*.bar.com   10.108.180.122   80      19h
+```
+
+### 18.5.2 IngressClass资源
+
+在使用`helm`安装`IngressController`即ingress-nginx时自动创建的
+
+```bash
+$ kubectl get ingressclasses
+NAME    CONTROLLER             PARAMETERS   AGE
+nginx   k8s.io/ingress-nginx   <none>       23h
+```
+
+具体配置内容：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  annotations:
+    meta.helm.sh/release-name: ingress-nginx
+    meta.helm.sh/release-namespace: ingress-nginx
+  creationTimestamp: "2024-10-10T07:27:02Z"
+  generation: 1
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+    app.kubernetes.io/version: 1.5.1
+    helm.sh/chart: ingress-nginx-4.4.2
+  name: nginx
+  resourceVersion: "640535"
+  uid: 7a4d9257-e6f5-4431-b862-3cf172f0739b
+spec:
+  controller: k8s.io/ingress-nginx
+```
+
+### 18.5.3 IngressController
+
+ingress控制器，就是我们安装的`Ingress-nginx`，即Pod的形式运行在Node节点上：
+
+```bash
+$ kubectl get pod -n ingress-nginx -o wide
+NAME                             READY   STATUS    RESTARTS      AGE   IP                NODE        NOMINATED NODE   READINESS GATES
+ingress-nginx-controller-n662s   1/1     Running   1 (17h ago)   23h   192.168.136.153   k8s-node2   <none>           <none>
+```
+
+**具体以Deployment还是以DaemonSet的进行管理，以安装ingress-nginx时配置文件values.yaml中配置为准**
+
+## 18.6 ingress处理流程
+
++ 客户端发送请求，必须先经过`IngressController`（如**ingress-nginx**）
+
+  **因为Ingress控制器运行中Pod中，以service公开的，会在Node节点上监听端口如80、443。所以你访问一个域名肯定会进入固定的、已知Ingress控制器，除非入口出使用了外部负载均衡器，且集群内部有多个ingress控制器，才会无法确认ingress类型。**
+
+  一般来说域名和ingress控制器绑定了
+
+  > 这是为了解释疑惑集群中多个ingress控制器，谁会先拦截请求？（域名=>Node机器:port=>确定的ingress控制器，不是随机）
+
++ `IngressController`会先检查请求头`Host`的值，查看是否有与之匹配的`ingress`资源（如**bar.com对应nginx-ingress**）
+
++ 然后根据`Ingress`资源中`spec.ingressClassName`或`metadata.annotations.kubernetes.io/ingress.class`的值找到对应的`IngressController`来处理
+
++ 然后再根据ingress资源对应的path路径规则进行转发、拦截
+
+**举例**
+
++ 根据请求`Host: bar.com`找到`nginx-ingress`（ingress名字）
++ `nginx-ingress`根据`spec.ingressClassName="nginx"`找到**名字为nginx的IngreClass资源**
++ **名字为nginx的IngreClass资源**根据`spec.controller=k8s.io/ingress-nginx`找到ingress控制器
++ `ingress-nginx`ingress控制器，根据ingress资源中path路径规则进行转发、拦截
+
+> ingress控制器实际还是Pod+Service，不过**占用了Node主机的端口如80、443**。
