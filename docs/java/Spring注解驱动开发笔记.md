@@ -1,3 +1,5 @@
+# 
+
 # 一：IOC容器的组件注册
 
 ## 1、@ComponentScan 注解
@@ -2678,20 +2680,20 @@ public @interface EnableTransactionManagement {
 >      }
 >   }
 >   ...
->     
+>       
 >    /*
 >    	下面就是AOP原理的过程：即利用后置处理器在对象创建后，包装对象，返回一个代理对象（增强类），代理对象执行方法利用拦截器链进行调用事务方法
 >    	@Nullable
 >   	public static BeanDefinition registerAutoProxyCreatorIfNecessary(BeanDefinitionRegistry registry) {
 >   		return registerAutoProxyCreatorIfNecessary(registry, null);
 >   	}
->     
+>       
 >   	@Nullable
 >   	public static BeanDefinition registerAutoProxyCreatorIfNecessary(
 >   			BeanDefinitionRegistry registry, @Nullable Object source) {
 >   		return registerOrEscalateApcAsRequired(InfrastructureAdvisorAutoProxyCreator.class, registry, source);
 >   	}
->     
+>       
 >   	找出关键类：给IOC容器中注册一个组件InfrastructureAdvisorAutoProxyCreator
 >   	...
 >    */
@@ -2708,7 +2710,7 @@ public @interface EnableTransactionManagement {
 >   ```java
 >   //设置事务属性，主要是设置事务注解解析器new SpringTransactionAnnotationParser()
 >   advisor.setTransactionAttributeSource(transactionAttributeSource);
->     
+>       
 >   //SpringTransactionAnnotationParser.class只要用于解析注解 @Transactional的属性，value,transactionManager...等等所有
 >   public @interface Transactional {
 >   	@AliasFor("transactionManager")
@@ -2725,7 +2727,7 @@ public @interface EnableTransactionManagement {
 >   	String[] rollbackForClassName() default {};
 >   	Class<? extends Throwable>[] noRollbackFor() default {};
 >   	String[] noRollbackForClassName() default {};
->     
+>       
 >   }
 >   ```
 >   
@@ -2734,7 +2736,7 @@ public @interface EnableTransactionManagement {
 >     ```Java
 >     //设置事务/通知拦截器用于执行,开启事务的方法的事务AOP
 >     advisor.setAdvice(transactionInterceptor);
->         
+>             
 >     //创建TransactionInterceptor
 >     //调用器TransactionInterceptor.invoke方法
 >     //然后调用return invokeWithinTransaction(...) 最终要的方法
@@ -2752,12 +2754,12 @@ public @interface EnableTransactionManagement {
 >     //事务拦截器：
 >     //1）、先获取事务相关的属性
 >     		final TransactionAttribute txAttr = (tas != null ? tas.getTransactionAttribute(method, targetClass) : null);
->         
+>             
 >     //2）、再获取PlatformTransactionManager，如果事先没有添加指定任何transactionmanger最终会从容器中按照类型获取一个PlatformTransactionManager；【就是DataSourceTransactionManager，即给jdbctemplate和mybatis的父接口,也就是自己注册到IOC容器中的事务管理器】
 >     PlatformTransactionManager ptm = asPlatformTransactionManager(tm);
->         
+>             
 >     //3）、执行目标方法如果异常，获取到事务管理器，利用事务管理回滚操作；如果正常，利用事务管理器，提交事务  
->         
+>             
 >         try {
 >             //尝试调用 加上@Transactional 的Service层方法
 >             retVal = invocation.proceedWithInvocation();

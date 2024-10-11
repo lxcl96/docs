@@ -1,3 +1,6 @@
+# 
+
+```java
 package lambda;
 
 
@@ -7,25 +10,27 @@ import java.util.Comparator;
 import java.util.function.Consumer;
 
 /**
+
  * 总结：lambda接口只用于接口，且接口中只有一个抽象方法 ==>函数式接口
  * Lambda表达式只能用于实现功能接口，这些接口是具有单个抽象方法的接口。
  * lambda表达式    (Integer o1,Integer o2)  -> Integer.compare(o1,o2)
- *格式：
- *      ->：lambda操作符 或叫箭头操作符
- *      ->左边：lambda形参列表 （其实就是接口中的抽象方法的形参列表） 不能省略
- *      ->右边：lambda体 （其实就是方法体） {} 如果就一句话可以省略
- *
+   *格式：
+ * ->：lambda操作符 或叫箭头操作符
+ * ->左边：lambda形参列表 （其实就是接口中的抽象方法的形参列表） 不能省略
+ * ->右边：lambda体 （其实就是方法体） {} 如果就一句话可以省略
+    *
  * lambda使用6中情况：
- *
-  *
+   *
+     *
  * lambda表达式的本质： 作为->箭头左边接口的对象
- *
+   *
  * @FileName:LambdaTest.class
  * @Author:ly
  * @Date:2022/5/17
  * @Description:
- */
- public class LambdaTest {
+   */
+    public class LambdaTest {
+```
 
 
 ```java

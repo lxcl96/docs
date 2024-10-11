@@ -42,3 +42,21 @@
 
 + [IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法](blogs/IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法.md "IDEA下pom文件引入依赖成功，但是运行时提示包不存在的解决方法")
 + [利用JDK工具HSDB查看Running JVM中的class实例属性](blogs/利用JDK工具HSDB查看RunningJVM中的class实例属性.md "利用JDK工具HSDB查看Running JVM中的class实例属性")
+
+
+
+> [!NOTE]
+> An alert of type 'note' using global style 'callout'.
+
+> [!Tip|style:flat]
+> An alert of type 'note' using global style 'callout'.
+
+> [!Warning]
+> An alert of type 'note' using global style 'callout'.
+
+> [!Attention]
+> An alert of type 'note' using global style 'callout'.
+
+> [!TIP|icon:fas fa-comments]
+>
+> 自定义图标,https://fontawesome.com/v5/search?q=chess-bishop&o=r ,选择对应版本`5.15.4`,替换`fas fa-comments`中`comments`为自己需要的

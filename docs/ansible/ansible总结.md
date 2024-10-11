@@ -1,3 +1,5 @@
+# 
+
 # 1. ansible保留主机变量
 
 + `all` 所有定义的和未定义的主机, 等于`localhost`+`ungrouped`

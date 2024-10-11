@@ -1,3 +1,5 @@
+# 
+
 # Spring概念
 
 ## 1、Spring框架是一个轻量级开源的JavaEE应用程序框架
@@ -487,7 +489,7 @@ public void test2() {
 >    }
 >    //xml配置
 >    <bean id="myBean" class="com.ly.spring5.collectionType.facbean.MyBean"></bean>
->                                                        
+>                                                           
 >    //实际使用获取不同于配置文件的Bean类型,需要传入想要的类class
 >    //获取目标bean
 >    Course myBean = context.getBean("myBean", Course.class);
