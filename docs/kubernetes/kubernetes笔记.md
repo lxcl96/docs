@@ -4857,3 +4857,348 @@ ingress-nginx-controller-n662s   1/1     Running   1 (17h ago)   23h   192.168.1
 + `ingress-nginx`ingress控制器，根据ingress资源中path路径规则进行转发、拦截
 
 > ingress控制器实际还是Pod+Service，不过**占用了Node主机的端口如80、443**。
+
+# 19. configMap
+
+ConfigMap 是一种 API 对象，用来**将非机密性的数据保存到键值对中**。使用时， [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 可以将其用作**环境变量、命令行参数或者存储卷中的配置文件**。
+
+ConfigMap 将你的环境配置信息和[容器镜像](https://kubernetes.io/zh-cn/docs/reference/glossary/?all=true#term-image)解耦，便于应用配置的修改。
+
+kubernetes中是通过将配置（键值对）信息存储在configMap中，然后在Pod中进行引用的形式实现的。
+
+> [!Note]
+>
+> ConfigMap不支持加密功能，如果需要请使用`Secret`。ConfigMap不支持跨命名空间访问，所以如果需要只能新建cm资源。configMap中保存数据推荐不大于1Mib，超过最好用挂载卷。
+
+## 19.0 api文档
+
++ configMap 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/configuration/configmap/
++ configMap api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/config-and-storage-resources/config-map-v1/
++ Pod api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F
+
+## 19.1 创建configMap资源
+
+> [!Attention]
+>
+> 简单来说，configmap不解析文件内键值对，**直接将文件名当作键，文件内容当作值存入configmap**。有一个特殊，`--from-env-file`可以将文件内容解析成键值对（基于等式`=`），而不是将文件内容全部当为值，文件名当为键。
+
++ 通过yaml配置文件创建
+
+  1. 定义配置文件 `test-configmap.yaml`
+
+     ```yaml
+     # https://kubernetes.io/docs/concepts/configuration/configmap/
+     kind: ConfigMap
+     apiVersion: v1
+     metadata:
+       name: test-configmap-1 # 当前configmap的名字
+       namespace: default # cm所在的命名空间
+       labels: # 用于筛选此cm
+         app: test-configmap 
+     binaryData: # 用于存放二进制数据base64 （1.键不能和data中键重复 2.k8s版本大于1.10）
+       hello: aGVsbG8K # 简单理解右边只能是base64加密后的数据
+     data: # 存放明文数据
+       target: test
+       jvm: '-Xmax512m -Xmin128m'
+     
+     immutable: false # 默认为nil，表示可以修改cm中数据；如果为true表示不可以更改
+     ```
+
+  2. 创建并查看
+
+     ```bash
+     $ kubectl get cm test-configmap-1 --show-labels
+     NAME               DATA   AGE   LABELS
+     test-configmap-1   3      36s   app=test-configmap
+     # 查看二进制数据（base64加密后的）
+     $ kubectl get configmap test-configmap-1 -o jsonpath='{.binaryData}' # 直接-o yaml也可以
+     {"hello":"aGVsbG8K","kubernetes":"a3ViZXJuZXRlcwo="}
+     ```
+
+     ![image-20241012151946829](./_media/image-20241012151946829.png)
+
++ 通过命令创建
+
+  1. `$ kubectl create configmap --help`查看命令行帮助
+
+  2. **通过目录创建，即将该目录下所有文件加入configmap**
+
+     ```bash
+     # 1.创建
+     $ kubectl create configmap test-configmap-dir --from-file=db/
+     # 2.以yaml格式查看配置文件
+     $ kubectl get test-configmap-dir -o yaml
+     # 3.描述
+     $kubectl describe cm test-configmap-dir
+     ```
+
+     ![image-20241012154611065](./_media/image-20241012154611065.png)
+
+     ![image-20241012155113955](./_media/image-20241012155113955.png)
+
+  3. **通过单文件创建（键可以起别名）**
+
+     ```bash
+     # 1.创建cm配置，指定文件config/my.conf 并用文件名当作键名；指定文件config/application.yaml并重命名键名为microservice
+     $ kubectl create configmap test-config-2 --from-file=config/my.conf --from-file=microservice=config/application.yaml
+     # 2. 以yaml格式查看配置文件
+     $ kubectl get cm test-configmap-2 -o yaml
+     # 3.描述
+     $ kubectl describe cm test-configmap-2
+     ```
+
+     ![image-20241012161354648](./_media/image-20241012161354648.png)
+
+     ![image-20241012161534895](./_media/image-20241012161534895.png)
+
+  4. **通过命令行，直接指明键值对（代替文件）**
+
+     ```bash
+     # 键代替文件名，值代替文件内容
+     $kubectl create configmap test-configmap-3 --from-literal=k1=v1 --from-literal=app=mysql
+     ```
+
+     ![image-20241012162317888](./_media/image-20241012162317888.png)
+
+     ![image-20241012162339497](./_media/image-20241012162339497.png)
+
+  5. 唯一一个参数，`--from-env-file`可以将**文件内容解析成键值对（基于等式`=`），而不是将文件内容全部当为值，文件名当为键**。
+
+     ```bash
+     # 里面是基于等式=的键值对，文件名随意
+     kubectl create configmap test-configmap-4 --from-env-file=db/db.txt
+     ```
+
+     ![image-20241012164154731](./_media/image-20241012164154731.png)
+
+     ![image-20241012164231509](./_media/image-20241012164231509.png)
+
+## 19.2 使用configMap资源
+
+configMap实际使用是在Pod中，当然在Deployment，DaemonSet，StatefulSet等的template中都是可以使用的。
+
+### 19.2.1 将configMap当作环境变量使用
+
+将**configmap映射为容器环境变量**
+
+> [!Warning]
+>
+> **二进制数据binaryData通过环境变量映射会丢失**
+
+1. 定义一个Pod（最简单）`cm-env-pod.yaml`，并创建
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "cm-env-pod"
+     namespace: default
+     labels:
+       app: "cm-pod"
+   spec:
+     restartPolicy: Never
+     containers:
+     - name: alpine
+       image: 192.168.31.79:5000/alpine:latest
+       command: ["sh", "-c", "env;sleep 3600"] # 输出容器环境变量，查看是否有我们加上的
+       env: # 自动容器的环境变量(重复键以env为准)
+       - name: myservice # 容器中环境变量的键(自定义的,可以不和key一样)
+         valueFrom:
+           configMapKeyRef:
+             name: test-configmap-2 # configmap的名字（直接加载文件的）
+             key: microservice # 指定cm（test-configmap-2）数据中的key键
+             optional: true # 创建Pod前该cm资源必须存在，且存在键microservice
+       - name: mysql # 容器中环境变量的键(自定义的,可以不和key一样)
+         valueFrom:
+           configMapKeyRef:
+             name: test-configmap-2 # configmap的名字（直接加载文件的）
+             key: 'my.conf' # 指定cm（test-configmap-1）数据中的key键
+             optional: false # 创建Pod前该cm资源可以不存在
+   
+       envFrom: # 指定内容环境变量的来源(重复键以env为准)
+       -  configMapRef: # 将指定configMap中数据，加载Pod容器中的环境变量(全部)
+           name: test-configmap-1 # configmap的名字（有二进制数据的）
+           optional: true # 创建Pod前该cm资源必须存在,已经被定义
+   ```
+
+2. 查看Pod容器输出
+   ```bash
+   $ [ly@k8s-master configMaptest]$ kubectl logs pod cm-env-pod
+   Error from server (NotFound): pods "pod" not found
+   [ly@k8s-master configMaptest]$ kubectl logs cm-env-pod
+   jvm=-Xmax512m -Xmin128m
+   target=test
+   mysql=servicename=mysql
+   enable=true
+   myservice=spring:
+     name: test-app
+   server:
+     port: 8080
+   ...
+   ```
+
+3. 与configMap中数据对比
+
+   **经验证，除了binaryData丢失，其余data数据都存在，成功映射**
+
+   + configmap`test-configmap-1`中数据 
+
+     ```yaml
+     apiVersion: v1
+     binaryData:
+       hello: aGVsbG8K
+       kubernetes: a3ViZXJuZXRlcwo=
+     data:
+       jvm: -Xmax512m -Xmin128m
+       target: test
+      kind: ConfigMap
+      ...
+     ```
+
+   + configmap`test-configmap-2`中数据 
+     ```yaml
+     apiVersion: v1
+     data:
+       microservice: |-
+         spring:
+       	  name: test-app
+         server:
+     	  port: 8080
+       my.conf: |-
+         servicename=mysql
+         enable=true
+     kind: ConfigMap
+     ...
+     ```
+
+> [!Note]
+>
+> 通过映射到容器环境变量方式使用，**不会自动更新环境变量，除非Pod重启（被删了重建）**
+
+### 19.2.2 将config当作文件使用
+
+搭配挂载卷使用，将**configmap映射为容器中文件**
+
+> [!Note]
+>
+> 是把configmap中的**键值对**映射到容器中的文件，其中**文件名为键，文件内容为值**。容器中目录不存在会自动创建。
+
+1. 定义一个Pod（最简单）`cm-file-pod.yaml`，并创建
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "cm-file-pod"
+     namespace: default
+     labels:
+       app: "cm-pod"
+   spec:
+     containers:
+     - name: alpine
+       image: 192.168.31.79:5000/alpine:latest
+       command: ["sh", "-c", "sleep 3600"]
+       volumeMounts: # 定义容器挂载卷信息
+       - name: cm-volume-1 # 使用挂在卷 cm-volume-1
+         mountPath: /etc/myconfig/cm-volume-1 # 将挂载卷 cm-volume-1映射到容器指定目录
+   	# 注意同一容器挂载多个volume，mountPath必须唯一
+       - name: cm-volume-2 # 使用挂在卷 cm-volume-2
+         mountPath: /etc/myconfig/cm-volume-2 # 将挂载卷 cm-volume-2映射到容器指定目录
+   
+     volumes: # 定义挂载卷(后面讲)
+       - name: cm-volume-1 # 挂载卷1 的名字
+         configMap: # 挂载卷1 的类型为configmap
+           name: test-configmap-1 # configmap的名字为 test-configmap-1
+           optional: false # 挂载卷前可以不存在该cm
+           defaultMode: 0644 # 默认文件挂载权限644
+           # items: 不指定映射cm数据到容器中文件信息，默认映射cm的全部数据(包括binaryData,数据键key为文件名，数据值value为文件名)
+   
+       - name: cm-volume-2 # 挂载卷2 的名字
+         configMap: # 挂载卷2 的类型为configmap
+           name: test-configmap-2 # configmap的名字为 test-configmap-2
+           optional: true # 挂载卷前必须存在该cm
+           defaultMode: 0644 # 默认文件挂载权限644
+           items: # 将指定cm中指定键值对映射到容器的文件信息(数据键key为文件名，数据值value为文件名)
+           - key: my.conf # cm中数据键key
+             path: config/mysql.conf # cm中数据键key my.conf映射到容器中的路径文件名（相对路径，不允许有.）
+             mode: 0644
+     restartPolicy: Never
+   
+   ```
+
+2. 进入容器中，查看文件内容并验证
+
+   ```bash
+   $ kubectl exec -it cm-file-pod -c alpine --sh
+   	\# tree /etc/myconfig/
+       /etc/myconfig/ # 自动创建不存在的目录
+       ├── cm-volume-1
+       │   ├── hello -> ..data/hello # 是个链接文件（文件），里面base64加密数据被解密了，变为原文即hello
+       │   ├── jvm -> ..data/jvm
+       │   ├── kubernetes -> ..data/kubernetes  # 是个链接文件（文件），里面base64加密数据被解密了，变为原文即kubernetes
+       │   └── target -> ..data/target
+       └── cm-volume-2
+           └── config -> ..data/config # 是个链接文件（是目录，有点特殊），里面有mysql.conf 即/etc/myconfig/cm-volume-2/config/mysql.conf
+   ```
+
+3. 与configMap中数据对比
+
+   **经验证，binaryData，data数据都存在，成功映射**
+
+   + configmap`test-configmap-1`中数据 
+
+     ```yaml
+     apiVersion: v1
+     binaryData:
+       hello: aGVsbG8K
+       kubernetes: a3ViZXJuZXRlcwo=
+     data:
+       jvm: -Xmax512m -Xmin128m
+       target: test
+      kind: ConfigMap
+      ...
+     ```
+
+   + configmap`test-configmap-2`中数据 
+
+     ```yaml
+     apiVersion: v1
+     data:
+       microservice: |-
+         spring:
+       	  name: test-app
+         server:
+     	  port: 8080
+       my.conf: |-
+         servicename=mysql
+         enable=true
+     kind: ConfigMap
+     ...
+     ```
+
+> [!Warning]
+>
+> 1. 数据加入configMap中注意特殊格式**布尔值必须加引号（enable="true"）**，否则映射到容器文件会丢失
+> 2. 映射数据不指定`spec.volumes.configMap.items`，那么会将config中所有数据映射到容器目录下（键-->文件名，值-->文件内容），**包括binaryData和data中数据**
+
+# 20. secret
+
+Secret 是一种包含少量敏感信息例如密码、令牌或密钥的对象。 这样的信息可能会被放在 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 规约中或者镜像中。 使用 Secret 意味着你不需要在应用程序代码中包含机密数据。
+
+由于创建 Secret 可以独立于使用它们的 Pod， 因此在创建、查看和编辑 Pod 的工作流程中暴露 Secret（及其数据）的风险较小。 Kubernetes 和在集群中运行的应用程序也可以对 Secret 采取额外的预防措施， 例如避免将敏感数据写入非易失性存储。
+
+Secret 类似于 [ConfigMap](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/configure-pod-configmap/) 但专门用于保存机密数据。
+
+## 20.1 api文档
+
++ secret介绍文档：https://kubernetes.io/zh-cn/docs/concepts/configuration/secret/#working-with-secrets
++ secret api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/config-and-storage-resources/secret-v1/
+
+
+
+# k8s调试模式
+
++ --v=6
++ --dry-run=client/server 用于测试命令是否正确，不会创建资源。client只用于本地验证，server发送到服务端进行验证
