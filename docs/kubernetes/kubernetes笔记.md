@@ -4973,7 +4973,7 @@ kubernetes中是通过将配置（键值对）信息存储在configMap中，然�
 
      ![image-20241012164231509](./_media/image-20241012164231509.png)
 
-## 19.2 使用configMap资源
+## 19.2 Pod使用configMap资源
 
 configMap实际使用是在Pod中，当然在Deployment，DaemonSet，StatefulSet等的template中都是可以使用的。
 
@@ -5087,6 +5087,7 @@ configMap实际使用是在Pod中，当然在Deployment，DaemonSet，StatefulSe
 1. 定义一个Pod（最简单）`cm-file-pod.yaml`，并创建
 
    ```yaml
+   # k8s默认挂载是以目录的形式,导致该目录下其余文件被删掉
    # https://kubernetes.io/docs/concepts/workloads/pods/
    apiVersion: v1
    kind: Pod
@@ -5182,6 +5183,214 @@ configMap实际使用是在Pod中，当然在Deployment，DaemonSet，StatefulSe
 >
 > 1. 数据加入configMap中注意特殊格式**布尔值必须加引号（enable="true"）**，否则映射到容器文件会丢失
 > 2. 映射数据不指定`spec.volumes.configMap.items`，那么会将config中所有数据映射到容器目录下（键-->文件名，值-->文件内容），**包括binaryData和data中数据**
+
+## 19.3 subPath单文件（configMap映射文件）
+
+> [!Note]
+>
+> 将configMap通过volume映射为文件，默认情况是**使用挂载的目录，覆盖容器中源目录**，这样或导致**源目录文件部分丢失**。为了解决这一问题，就需要使用`sepc.containers.volumeMounts.subPath`
+
+1. 定义配置文件`cm-nginx-subpath-pod.yaml`
+   ```yaml
+   # subPath单文件覆盖
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "cm-nginx-subpath-pod"
+     namespace: default
+     labels:
+       app: "cm-nginx"
+   spec:
+     containers:
+     - name: nginx
+       image: 192.168.31.79:5000/nginx:latest
+       resources:
+         limits:
+           cpu: 100m
+           memory: 100Mi
+   
+       volumeMounts:
+       - name: subpath-nginx-conf
+         # 有 subpath 时，该值实际映射为 文件
+         # 无 subpath 时，该值实际映射为 目录
+         mountPath: /etc/nginx/nginx.conf  #映射为文件
+         
+         # 必须与下面volumes中的items中的某一path完全一致
+         subPath: nginx.conf  # 表示引用
+   
+     volumes:
+       - name: subpath-nginx-conf # 定义volume卷名字
+         configMap: # 使用config挂载
+           name: test-cm-nginx # 引用的configMap的名字,确保和Pod在同一命名空间
+           items:
+           - key: nginx.conf # cm中一个数据键key
+             path: nginx.conf # 映射到容器中的文件名
+     restartPolicy: Never
+   
+   ```
+
+2. `kubectl apply -f cm-nginx-subpath-pod.yaml`创建pod
+
+3. 进入容器中查看配置文件内容是否和configMap中完全一致
+
+   ```bash
+   # 1.获取容器中文件内容
+   $ kubectl exec -it cm-nginx-subpath-pod -c nginx -- sh -c "cat /etc/nginx/nginx.conf"
+   # 2.获取configmap中数据，并进行比对
+   $ kuebctl get cm subpath-nginx-conf -o yaml
+   ```
+
+4. 经验证和配置文件中完全一致
+
+## 19.4 configMap热更新机制
+
+configMap映射热更新即**更新configMap中数据，容器中引用（环境变量，文件）是否自动同步**
+
+### 19.4.1 以环境变量形式映射到容器
+
+更新configMap中数据，**容器内环境变量不会更新，除非Pod被删除重启。**
+
+### 19.4.2 以文件形式映射到容器
+
+1. **默认方式，configMap借助volume以目录全覆盖**
+
+   更新configMap中数据，***容器内文件（目录覆盖的）会自动更新。更新周期是：更新时间+缓存时间***
+
+2. **subPath方式，configMap借助volume以文件覆盖**
+
+   更新configMap中数据，***容器内文件（单文件覆盖的）不会自动更新。***
+
+## 19.5 设置configMap不可修改
+
+设置configMap中数据创建后不可再修改，**注意：设置后不可恢复。只能删掉重新创建**
+
+```yaml
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: test-configmap-1 
+  namespace: default 
+binaryData: 
+  hello: aGVsbG8K 
+  ...
+data: 
+  target: test
+  ...
+
+immutable: true # 设置为true，则该cm资源不可再修改（除了删除重建）
+```
+
+> 创建configMap资源时添加的
+
+## 19.6 解决subPath单文件映射覆盖不可热更新问题
+
+有时我们既需要subPath覆盖单文件，有时又需要让其能够自动更新。下面是几种解决方法：（**思路都是借助文件软连接**）
+
+1. 在initContainer即初始化容器中，进行操作（**用不用subPath均可**）
+
+   具体思路就是：
+
+   1. 让初始化容器和服务容器镜像完全一样（如nginx）。
+   2. 然后将空目录卷`emptyDir`挂载到初始化容器中`/tmp/nginx/`，将初始化容器中配置目录`/etc/nginx`全部拷贝到`/tmp/nginx/`中。
+   3. 删除初始化目录中单文件如`nginx.conf`（为了后面建立软连接），等待初始化节点结束（初始化容器正确退出，完全销毁）。
+   4. 将空目录卷`emptyDir`挂载到服务容器中`/app/nginx/`，将confiMap数据挂载到`/etc/nginx`（目录全覆盖）
+   5. 在服务容器`command`中，将服务容器`/app/nginx/`下文件全部拷贝到`/etc/nginx`下即可
+
+   ```yaml
+   # Pod中使用
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: initc-nginx-pod
+   spec:
+     initContainers:
+     - name: init-nginx-config
+       image: 192.168.31.79:5000/nginx:latest
+       # 配置文件全部拷贝到临时目录下
+       command: ['sh', '-c', ' cp -r /etc/nginx/* /tmp/nginx/ && rm -rf /tmp/nginx/nginx.conf && echo 111 > /tmp/nginx/demo && sleep 3']  # 将nginx配置文件复制到临时挂在卷（睡眠几秒保证完成）
+       volumeMounts:
+       - name: tmp-dir
+         mountPath: /tmp/nginx/  # 挂载 ConfigMap 到临时路径
+   
+     containers:
+     - name: nginx
+       image: 192.168.31.79:5000/nginx:latest
+       # 将configmap中映射文件创建软连接到/etc/nginx/nginx.conf
+       command: ['sh', '-c', ' sleep 60 && ln -s /app/nginx/nginx.conf /etc/nginx/ && nginx -g "daemon off;"']
+       resources:
+         limits:
+           cpu: 100m
+           memory: 100Mi
+       volumeMounts:
+       - name: nginx-config-volume
+         mountPath: /app/nginx/nginx.conf # subPath映射的是文件，而不是目录
+         # 必须与下面volumes中的items中的某一path完全一致
+         subPath: nginx.conf  # 表示引用
+       - name: tmp-dir
+         mountPath: /etc/nginx/  # 挂载初始化容器拷贝过来的临时目录
+   
+     volumes:
+     - name: nginx-config-volume
+       configMap:
+         name: test-cm-nginx # 使用的configMap
+         items:
+           - key: nginx.conf # cm中一个数据键key
+             path: nginx.conf # 映射到容器中的文件名
+   
+     - name: tmp-dir
+       emptyDir: {} # 挂载一个空目录用于存储临时文件
+   
+   ```
+
+2. 全在服务容器`command`中处理 （**用不用subPath均可**）
+
+   具体思路同步：
+
+   1. 将configMap中数据，以单文件或目录的方式映射到容器临时目录`/app/nginx/`
+   2. 容器`command`中删除原来的配置文件`/etc/nginx.conf`
+   3. 给临时文件`/app/nginx/nginx.conf`创建软连接到`/etc/nginx.conf`（已存在的文件不允许创建软连接）即可
+
+   ```yaml
+   # 单文件覆盖,不加subPath报错
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "cm-nginx-linkfile-pod"
+     namespace: default
+     labels:
+       app: "cm-nginx"
+   spec:
+     containers:
+     - name: nginx
+       image: 192.168.31.79:5000/nginx:latest
+       # 注意挂载的文件  (1删源，2链接新，3启动)
+       command: ["sh","-c"," rm -rf /etc/nginx/nginx.conf && ln -s /app/nginx/nginx.conf /etc/nginx/nginx.conf && sleep 3 && nginx -g 'daemon off;'"]
+       resources:
+         limits:
+           cpu: 100m
+           memory: 100Mi
+   
+       volumeMounts:
+       - name: f-nginx-conf
+         mountPath: /app/nginx/ # 挂载卷到临时目录下（不是/etc/nginx）
+   
+     volumes:
+       - name: f-nginx-conf
+         configMap:
+           name: test-cm-nginx # 引用的configMap的名字,确保和Pod在同一命名空间
+           items:
+           - key: nginx.conf # cm中一个数据键key
+             path: nginx.conf # 映射到容器中的文件名
+     restartPolicy: Never
+   
+   ```
+
+3. 使用`postStart`钩子函数（不推荐，不能保证总是在`command`前执行）
+
+   具体思路方法2
 
 # 20. secret
 
