@@ -5398,12 +5398,82 @@ Secret 是一种包含少量敏感信息例如密码、令牌或密钥的对象�
 
 由于创建 Secret 可以独立于使用它们的 Pod， 因此在创建、查看和编辑 Pod 的工作流程中暴露 Secret（及其数据）的风险较小。 Kubernetes 和在集群中运行的应用程序也可以对 Secret 采取额外的预防措施， 例如避免将敏感数据写入非易失性存储。
 
-Secret 类似于 [ConfigMap](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/configure-pod-configmap/) 但专门用于保存机密数据。
+你可以将 Secret 用于以下场景：
+
+- [设置容器的环境变量](https://kubernetes.io/zh-cn/docs/tasks/inject-data-application/distribute-credentials-secure/#define-container-environment-variables-using-secret-data)。
+- [向 Pod 提供 SSH 密钥或密码等凭据](https://kubernetes.io/zh-cn/docs/tasks/inject-data-application/distribute-credentials-secure/#provide-prod-test-creds)。
+- [允许 kubelet 从私有镜像仓库中拉取镜像](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/pull-image-private-registry/)。
 
 ## 20.1 api文档
 
 + secret介绍文档：https://kubernetes.io/zh-cn/docs/concepts/configuration/secret/#working-with-secrets
 + secret api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/config-and-storage-resources/secret-v1/
+
+## 20.2 创建secret资源
+
+ 使用方法和configMap大致相同
+
++ 命令行创建
+
+  1. `kubectl create secret tls` 创建tls证书类型的secret资源,用于开启https访问
+
+     + 可以用在`ingress`中开启https访问
+     + 可以以文件的方式映射到Pod容器中,给服务容器使用
+
+  2. `kubectl create secret generic` 创建普通的secret配置
+      和configMap完全一样,就是将数据用base64编码,显得更安全点.
+
+  3. `kubectl create docker-registry` 创建镜像仓库验证的secret资源,用于授权拉取镜像
+
+     创建指向私有仓库的账户信息，在拉取镜像时使用。
+
+  ```bash
+  # 完整命令
+  $ kubectl create secret tls NAME --cert=path/to/cert/file --key=path/to/key/file [--dry-run=server|client|none]
+  $ kubectl create secret generic NAME [--type=string] [--from-file=[key=]source] [--from-literal=key1=value1] [--dry-run=server|client|none] [options]
+  $ kubectl create secret docker-registry NAME --docker-username=user --docker-password=password --docker-email=email [--docker-server=string] [--from-file=[key=]source] [--dry-run=server|client|none] [options]
+  ```
+
++ 直接使用yaml配置文件创建
+
+  配置文件当然可以创建所有形式的secret，通过在`type`中指定secret类型。支持类型如下
+
+  | 内置类型                              | 用法                                          |
+  | ------------------------------------- | --------------------------------------------- |
+  | `Opaque`                              | 用户定义的任意数据（默认类型）                |
+  | `kubernetes.io/service-account-token` | 服务账号令牌（依赖于k8s中serviceaccount资源） |
+  | `kubernetes.io/dockercfg`             | `~/.dockercfg` 文件的序列化形式               |
+  | `kubernetes.io/dockerconfigjson`      | `~/.docker/config.json` 文件的序列化形式      |
+  | `kubernetes.io/basic-auth`            | 用于基本身份认证的凭据                        |
+  | `kubernetes.io/ssh-auth`              | 用于 SSH 身份认证的凭据                       |
+  | `kubernetes.io/tls`                   | 用于 TLS 客户端或者服务器端的数据             |
+  | `bootstrap.kubernetes.io/token`       | 启动引导令牌数据                              |
+
+  **举例**
+
+  ```yaml
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: secret-sa-sample
+    annotations:
+      kubernetes.io/service-account.name: "sa-name" # serviceaccount 资源
+  type: kubernetes.io/service-account-token # secret类型
+  data:
+    extra: YmFyCg==
+  ```
+
+## 20.3 使用secret
+
+### 20.3.1 ingress使用tsl类型的secret
+
+### 20.3.2 pod使用docker-registry类型的secret
+
+### 20.3.3 以环境变量形式使用secret
+
+### 20.3.4 以文件形式使用secret
+
+## 20.4 设置secret不可修改
 
 
 
