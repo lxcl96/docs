@@ -5404,6 +5404,8 @@ Secret 是一种包含少量敏感信息例如密码、令牌或密钥的对象�
 - [向 Pod 提供 SSH 密钥或密码等凭据](https://kubernetes.io/zh-cn/docs/tasks/inject-data-application/distribute-credentials-secure/#provide-prod-test-creds)。
 - [允许 kubelet 从私有镜像仓库中拉取镜像](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/pull-image-private-registry/)。
 
+> 数据都是base64编码加密
+
 ## 20.1 api文档
 
 + secret介绍文档：https://kubernetes.io/zh-cn/docs/concepts/configuration/secret/#working-with-secrets
@@ -5467,13 +5469,423 @@ Secret 是一种包含少量敏感信息例如密码、令牌或密钥的对象�
 
 ### 20.3.1 ingress使用tsl类型的secret
 
+1. 创建本地证书用于模拟
+
+   创建的域名证书必须要包含要测试的域名（如zoo.com），否则k8s会检查common name或SNA与域名不匹配**就不会使用自己的证书**
+
+   ```bash
+   # 1.生成私钥 (一定要加上域名) 文件名要是域名
+   $ openssl genrsa -out zoo.com.key 2048
+   # 2.生成 CSR 使用自定义配置文件  (一定要加上域名)
+   $ openssl req -new -key zoo.com.key -out zoo.com.csr
+   	----- # 交互输入
+       Country Name (2 letter code) [XX]:us 
+       State or Province Name (full name) []:zoo
+       Locality Name (eg, city) [Default City]:zoo
+       Organization Name (eg, company) [Default Company Ltd]:zoo
+       Organizational Unit Name (eg, section) []:zoo
+       Common Name (eg, your name or your server\'s hostname) []:zoo.com #common name必须要包含要测试的域名 zoo.com
+       Email Address []:zoo@com
+   
+       Please enter the following 'extra' attributes
+       to be sent with your certificate request
+       A challenge password []:
+       An optional company name []:zoo
+   
+   # 3.(一定要加上域名)
+   $ openssl x509 -req -days 365 -in zoo.com.csr -signkey zoo.com.key -out zoo.com.crt
+   ```
+
+2. 创建secret tls类型资源
+
+   ```bash
+   $ kubectl create secret tls test-secret-tls --cert=zoo.com.crt --key=zoo.com.key
+   ```
+
+   ![image-20241015100035987](./_media/image-20241015100035987.png)
+
+3. 创建ingress资源,使用改tls
+
+   ```yaml
+   apiVersion: networking.k8s.io/v1
+   kind: Ingress
+   metadata:
+     annotations:
+       nginx.ingress.kubernetes.io/rewrite-target: /
+       nginx.ingress.kubernetes.io/use-regex: "false"
+     name: nginx-ingress-secret
+     namespace: default
+   spec:
+     defaultBackend:
+       service:
+         name: nginx-ingress-svc-externalname
+         port:
+           number: 80
+     ingressClassName: nginx
+     rules:
+     - host: zoo.com
+       http:
+         paths:
+         - backend:
+             service:
+               name: nginx-ingress-svc-clusterip
+               port:
+                 number: 80
+           path: /secret/
+           pathType: Prefix
+     tls: # 使用tls
+     - hosts:
+       - zoo.com
+       secretName: test-secret-tls # 和hosts同级别 （有-代表数组成员，没有-就不是为同级别的）
+   ```
+
+4. 发送https://192.168.136.153/secret/ssss请求
+
+   > [!Attention]
+   >
+   > 使用postman等接口工具，不要使用chrome扩展。由于浏览器安全设置，无法修改https的header（改了不生效）。
+
+   ![image-20241015143617626](./_media/image-20241015143617626.png)
+
+5. 查看pod`ingress-nginx`的日志
+
+   ```bash
+   $ kubectl logs -f ingress-nginx-controller-f8zvd -n ingress-nginx
+   ```
+
+   ![image-20241015144023428](./_media/image-20241015144023428.png)
+
 ### 20.3.2 pod使用docker-registry类型的secret
+
+> [!Note]
+>
+> 通过将账户密码以`docker-registry`形式保存在`secret`中，实现在Pod中拉取私有库容器时使用。
+>
+> **注意如果私有库是HTTP协议的，记得加入docker的不安全镜像insecure-registries中**`/etc/docker/daemon.json`
+
+1. 创建pod配置文件，指向一个需要账号的私有库
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "nginx-secret-registry-pod"
+     namespace: default
+     labels:
+       app: "secret-docker-registry"
+   spec:
+     containers:
+     - name: nginx
+       image: 192.168.31.79:5001/repo/nginx:latest # 私有库需要账户
+     restartPolicy: Always
+   ```
+
+2. 应用pod配置文件，发现容器拉取失败
+
+   ```bash
+   $ kubectl describe pod nginx-secret-registry-pod
+   ```
+
+   ![image-20241015150753876](./_media/image-20241015150753876.png)
+
+3. 创建secret资源
+
+   ```bash
+   # 1.创建验证信息
+   $ kubectl create secret docker-registry harbor-repo --docker-username=root --docker-password=12345 --docker-server=192.168.31.79:5001
+   # 2.查看
+   $ kubectl get secret harbor-repo -o yaml 
+   # 发现账户密码以base64编码存放其中
+   ```
+
+   ![image-20241015150146851](./_media/image-20241015150146851.png)
+
+4. 更新pod配置文件，拉取镜像时指定账户信息，重新创建
+
+   ```bash
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "nginx-secret-registry-pod"
+     namespace: default
+     labels:
+       app: "secret-docker-registry"
+   spec:
+     imagePullSecrets: # 使用镜像拉取secret，将会一个一个尝试
+     - name: harbor-repo
+     containers:
+     - name: nginx
+       image: 192.168.31.79:5001/repo/nginx:latest
+     restartPolicy: Always
+   ```
+
+5. 查看日志，Pod创建成功
 
 ### 20.3.3 以环境变量形式使用secret
 
+[操作和以环境变量形式使用configMap完全一样](#19.2.1 将configMap当作环境变量使用)
+
+1. 创建secret资源
+
+   ```bash
+   # 1.--type表示secret的类型，有tls，docker-registry等等 这里是string
+   $ kubectl create secret generic test-secret-data --type=string --from-literal=hello=hello --from-literal=kubernetes=kubernetes --from-literal=secret=secret
+   # 2. 没指定type类型，默认类型是Opaque
+   $ kubectl create secret generic test-secret-tag --from-literal=tag="哈哈哈" 
+   ```
+
+2. 创建pod使用secret
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "secret-env-pod"
+     namespace: default
+     labels:
+       app: "secret-env-pod"
+   spec:
+     containers:
+     - name: alpine
+       image: "192.168.31.79:5000/alpine:latest"
+       command: ["sh","-c"," env;sleep 60"]
+       env: # env设置单个环境变量，envfrom批量设置环境变量
+       - name: v-tag
+         valueFrom:
+           secretKeyRef:
+             name: test-secret-tag # secret名字
+             key: tag
+       envFrom:
+       - secretRef:
+           name: test-secret-data 
+     restartPolicy: Never
+   ```
+
+3. 创建Pod，查看日志
+
+   ```bash
+   $ kubectl logs secret-env-pod
+   # 输出如下
+   hello=hello
+   kubernetes=kubernetes
+   v-tag=哈哈哈 # 键就是env.name(键变了)
+   secret=secret
+   ...
+   ```
+
 ### 20.3.4 以文件形式使用secret
 
+[操作和以文件形式使用configMap完全一样](#19.2.2 将config当作文件使用)
+
+1. 创建secret资源（略，同上）
+
+2. 创建pod使用secret
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "secret-file-pod"
+     namespace: default
+     labels:
+       app: "secret-file-pod"
+   spec:
+     containers:
+     - name: alpine
+       image: "192.168.31.79:5000/alpine:latest"
+       command: ["sh","-c"," sleep 360"]
+       volumeMounts:
+       - name: secret-app # 使用的卷名（必须依据定义好的）和下面volume匹配
+         mountPath: /app/
+   
+     volumes: # 定义卷
+       - name: secret-app # 卷名
+         secret:
+           secretName: test-secret-data # 使用的secret名字
+           items:
+           - key: hello # 映射出去的数据（键-文件名，值，文件内容）
+             path: secret/hello.txt # 映射出去的文件名
+           - key: secret
+             path: secret/secret.txt # 映射出去的文件名
+     restartPolicy: Never
+   ```
+
+3. 查看文件列表
+
+   ```bash
+   $ kubectl exec -it secret-file-pod -- sh
+   / \# ls /app/secret/
+   hello.txt   secret.txt # 对应path的值
+   ```
+
 ## 20.4 设置secret不可修改
+
+[修改`immutable=true`](#19.5 设置configMap不可修改)
+
+# 21. volume
+
+为了解决容器数据持久化和跨容器共享文件问题。
+
+主要有下面几类卷：
+
+1. **暴露的持久卷**
+   + `persistentVolumeClaim` 即PVC（持久卷申领），需要搭配`persistentVolume`即PV（持久卷）使用。
+2. 映射卷
+   + `configMap`映射卷
+   + `secret`映射卷
+   + `downwardAPI`可用于获取Pod元数据信息（如命名空间、Pod名字、Resource资源等等）。
+   + `projected`可以将`secret,configMap,downloadApi,serviceAccountToken,clusterTrustBundle`资源内数据，整合起来映射到容器中同一个目录下， [详情见参考用例](https://kubernetes.io/zh-cn/docs/concepts/storage/projected-volumes/)
+3. **本地/临时目录**
+   + `emptyDir` 挂载一个临时空目录到容器中，用于多容器见文件共享。
+   + `hostPath` 将Node节点目录映射到容器中，用于持久化数据保存
+4. 持久卷
+   + `awsElasticBlockStore` 表示挂接到 kubelet 的主机随后暴露给 Pod 的一个 AWS Disk 资源 （v1.19已弃用）
+   + `azureDisk` 表示挂载到主机上并绑定挂载到 Pod 上的 Azure 数据盘（v1.19已弃用）
+   + `azureFile` 表示挂载到主机上并绑定挂载到 Pod 上的 Azure File Service
+   + `cephfs` 表示在主机上挂载的 Ceph FS，该文件系统挂载与 Pod 的生命周期相同（v1.11已弃用）
+   + `cinder` 表示 kubelet 主机上挂接和挂载的 Cinder 卷（v1.11已弃用）
+   + `csi`表示由某个外部容器存储接口（Container Storage Interface，CSI）驱动处理的临时存储，是个抽象的概念，类似于接口
+   + `ephemeral` 表示由一个集群存储驱动处理的卷
+   + `fc` 表示挂接到 kubelet 的主机随后暴露给 Pod 的一个 Fibre Channel 资源
+   + `flexVolume` 表示使用基于 exec 的插件制备/挂接的通用卷资源
+   + `flocker`  表示挂接到一个 kubelet 主机的 Flocker 卷
+   + `gcePersistentDisk` 表示挂接到 kubelet 的主机随后暴露给 Pod 的一个 GCE Disk 资源（v1.17已弃用）
+   + `glusterfs` 表示关联到主机并暴露给 Pod 的 Glusterfs 卷（v1.25已弃用）
+   + `iscsi` 表示挂接到 kubelet 的主机随后暴露给 Pod 的一个 ISCSI Disk 资源
+   + `image` 表示一个在 kubelet 的主机上拉取并挂载的 OCI 对象（容器镜像或工件）
+   + `nfs` 即Net File System，表示在主机上挂载的 NFS，其生命周期与 Pod 相同
+   + `photonPersistentDisk`  表示 kubelet 主机上挂接和挂载的 PhotonController 持久磁盘
+   + `portworxVolume` 表示 kubelet 主机上挂接和挂载的 portworx 卷（v1.25已弃用）
+   + `quobyte` 表示在共享 Pod 生命周期的主机上挂载的 Quobyte
+   + `rbd` 表示在共享 Pod 生命周期的主机上挂载的 Rados Block Device
+   + `scaleIO` 表示 Kubernetes 节点上挂接和挂载的 ScaleIO 持久卷
+   + `storageos` 表示 Kubernetes 节点上挂接和挂载的 StorageOS 卷
+   + `vsphereVolume `表示 kubelet 主机上挂接和挂载的 vSphere 卷（已弃用）
+5. 已弃用
+   + `gitRepo` 表示特定修订版本的 git 仓库
+
+## 21.0 api文档
+
++ volume 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/storage/volumes/#nfs
++ volume api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/config-and-storage-resources/volume/#persistent-volumes
+
+## 21.1  映射卷
+
++ `configMap` 使用见[19.2.2 将config当作文件使用](#19.2.2 将config当作文件使用)
++ `secret`  使用见[20.3.4 以文件形式使用secret](#20.3.4 以文件形式使用secret)
+
+## 21.2 本地、临时目录
+
+### 21.2.1 emptyDir
+
+> Pod删除`emptyDir`卷会被删除，容器崩溃不会导致Pod被删除，所以在此期间`emptyDir`卷是安全的
+
+在Pod创建一个空的共享卷，用于同一Pod内多容器共享文件资源。创建pod内两个容器，两个容器中都可以同时读写该挂在卷emptyDir并目录下文件同时更新。
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "v-emptydir-pod"
+  namespace: default
+  labels:
+    app: "v-emptydir-pod"
+spec:
+  containers:
+  - name: alpine-1
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    volumeMounts:
+    - name: volume-emptydir
+      mountPath: /data/  # 可以挂载到不同的目录
+
+  - name: alpine-2
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    volumeMounts:
+    - name: volume-emptydir
+      mountPath: /app/ # 可以挂载到不同的目录
+
+  volumes:
+    - name: volume-emptydir # 卷名
+      emptyDir: {} # 定义一个空挂载卷
+  restartPolicy: Never
+```
+
+### 21.2.2 hostPath
+
+> [!Waraning]
+>
+> 无论 `hostPath` 卷是以只读还是读写方式挂载，使用时都需要小心。[详见](https://kubernetes.io/zh-cn/docs/concepts/storage/volumes/#hostpath)
+
+将**Node节点上的目录映射到容器中**，实现数据持久化存储与热更新。但同时也会有个问题，**如果其余Node机器没有这个目录就会导致映射的是一个空目录**，即目录下基于非集群资源。
+
+创建pod内两个容器，两个容器和主机Node节点中都可以同时读写该挂在卷hostPath并目录下文件同时更新。
+
+**hostPath**的类型**type**如下： 
+
+| `‌""`                | 空字符串（默认）用于向后兼容，这意味着在安装 hostPath 卷之前不会执行任何检查。 |
+| ------------------- | ------------------------------------------------------------ |
+| `DirectoryOrCreate` | 如果在给定路径上什么都不存在，那么将根据需要创建空目录，权限设置为 0755，具有与 kubelet 相同的组和属主信息。 |
+| `Directory`         | 在给定路径上必须存在的目录。                                 |
+| `FileOrCreate`      | 如果在给定路径上什么都不存在，那么将在那里根据需要创建空文件，权限设置为 0644，具有与 kubelet 相同的组和所有权。 |
+| `File`              | 在给定路径上必须存在的文件。                                 |
+| `Socket`            | 在给定路径上必须存在的 UNIX 套接字。                         |
+| `CharDevice`        | **（仅 Linux 节点）** 在给定路径上必须存在的字符设备。       |
+| `BlockDevice`       | **（仅 Linux 节点）** 在给定路径上必须存在的块设备。         |
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "v-hostpath-pod"
+  namespace: default
+  labels:
+    app: "v-hostpath-pod"
+spec:
+  containers:
+  - name: alpine-1
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    volumeMounts:
+    - name: volume-hostpath
+      mountPath: /data/ # 挂载路径可以不同
+
+  - name: alpine-2
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    volumeMounts:
+    - name: volume-hostpath
+      mountPath: /app/ # 挂载路径可以不同
+
+  volumes:
+    - name: volume-hostpath
+      hostPath: # 使用主机路径
+        path: /home/ly/tmp
+        type: Directory # 表示Node节点路径的类型，默认为""。具体见上面表格
+  restartPolicy: Never
+```
+
+## 21.3 持久卷
+
+针对不同种类的文件系统，这里以NFS为例。NFS即网络文件系统，可以实现跨节点跨Pod多容器的数据实时共享与持久化存储，当然不适合实时存储，网络开销比较大。
+
+### 21.3.1 安装并启动NFS服务
+
+
+
+### 21.3.2 使用NFS进行挂载
+
+
+
+# 22. 
+
+
+
+
 
 
 
