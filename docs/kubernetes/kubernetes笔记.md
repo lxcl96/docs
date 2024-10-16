@@ -131,7 +131,7 @@ Kubernetes 是基于Google在过去十五年来大量生产环境中运行工作
 
 适用度更广，功能更强大，相较于Mesos来说节点规模较小。
 
-# 2. ==Kubernetes组件==
+# 2. Kubernetes组件
 
 一个正常运行的 Kubernetes 集群所需的各种组件
 
@@ -139,7 +139,7 @@ Kubernetes 是基于Google在过去十五年来大量生产环境中运行工作
 
 ![architecture](./_media/architecture.png)
 
-## 2.1 ==核心组件==
+## 2.1 核心组件
 
 Kubernetes 集群由**一个控制平面和一组用于运行容器化应用的工作机器**组成，这些**工作机器称作节点（Node）**。 每个集群至少需要一个工作节点来运行 Pod。
 
@@ -338,7 +338,7 @@ kubernetes中资源类别有很多种，`kubectl`可以通过配置文件来创�
 
 **缺点**: 集群环境下需要实现主从,数据同步,备份,水平扩容复杂
 
-# 5. ==kubernetes资源变量分类==
+# 5. kubernetes资源变量分类
 
 参考地址：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/
 
@@ -386,7 +386,7 @@ kubernetes中资源类别有很多种，`kubectl`可以通过配置文件来创�
 
   将`ClusterRole`或`Role`与资源进行绑定（可以绑定到集群级别上）
 
-## 5.3 *==命名空间级==*
+## 5.3 *命名空间级*
 
 ### 5.3.1 工作负载资源
 
@@ -963,7 +963,7 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
 
 ## 8.4 命令行工具安装k8s
 
-# 9. *==kubectl==*命令行工具
+# 9. *kubectl*命令行工具
 
 Kubernetes提供kubectl是使用kubernetes API与kubernetes集群的控制面板(Control panel)进行通信的命令行工具.
 
@@ -1060,7 +1060,7 @@ kubectl logs [Tab]
 
 + 更新环境变量`source .bashrc`
 
-## 9.3 *==资源操作==*
+## 9.3 *资源操作*
 
 P25 4分14
 
@@ -1244,7 +1244,7 @@ REST API 是 Kubernetes 的基本结构。 所有操作和组件之间的通信�
 > - 处理节点状态变化（如节点失效）。
 > - 监控资源对象（如 PersistentVolume 和 PersistentVolumeClaim 的绑定）。
 
-# 13. *==namespace和Master,Node,Pods,Service的关系==*
+# 13. *namespace和Master,Node,Pods,Service的关系*
 
 ## 13.1 关系
 
@@ -1358,7 +1358,7 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 
 3. 两个coredns一个服务service-cidr，一个服务pod-cidr
 
-# 14. ==*深入Pod*==
+# 14. *深入Pod*
 
 ## 14.1 Pod的配置文件
 
@@ -2941,7 +2941,7 @@ kubectl delete hpa nginx-hpa
 
    
 
-# 17. ==*Service*==
+# 17. *Service*
 
 在 kubernetes 中，当创建带有多个副本的 deployment 时，kubernetes 会创建出多个  pod，此时即一个服务后端有多个容器，那么在 kubernetes 中负载均衡怎么做？容器漂移后 ip 也会发生变化，如何做服务发现以及会话保持？
 
@@ -5772,12 +5772,12 @@ Secret 是一种包含少量敏感信息例如密码、令牌或密钥的对象�
 + volume 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/storage/volumes/#nfs
 + volume api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/config-and-storage-resources/volume/#persistent-volumes
 
-## 21.1  映射卷
+## 21.1  映射卷 （configMap secret）
 
 + `configMap` 使用见[19.2.2 将config当作文件使用](#19.2.2 将config当作文件使用)
 + `secret`  使用见[20.3.4 以文件形式使用secret](#20.3.4 以文件形式使用secret)
 
-## 21.2 本地、临时目录
+## 21.2 本地、临时目录（hostPath emptyDir）
 
 ### 21.2.1 emptyDir
 
@@ -5869,23 +5869,360 @@ spec:
   restartPolicy: Never
 ```
 
-## 21.3 持久卷
+## 21.3 持久卷（NFS）
 
 针对不同种类的文件系统，这里以NFS为例。NFS即网络文件系统，可以实现跨节点跨Pod多容器的数据实时共享与持久化存储，当然不适合实时存储，网络开销比较大。
 
 ### 21.3.1 安装并启动NFS服务
 
+1. 安装nfs
 
+   ```bash
+   $ sudo yum install nfs-utils -y
+   ```
+
+2. 启动nfs
+
+   ```bash
+   $ sudo systemctl start nfs-server
+   $ sudo systemctl enable nfs-server
+   ```
+
+3. 查看nfs版本
+
+   ```bash
+   $ sudo cat /proc/fs/nfsd/versions 
+   -2 +3 +4 +4.1 +4.2 # -表示禁用v2版本，+表示启用v3 v4 v4.1 v4.2版本
+   ```
+
+4. 创建共享目录
+
+   ```bash
+   $ sudo mkdir -p /data/nfs/ro /data/nfs/rw
+   $  
+   ```
+
+5. 设置共享目录export
+
+   ```bash
+   $ sudo tee /etc/exports <<EOF
+   # 目录		网段ip			权限
+   /data/nfs/ro 192.168.136.0/24(ro,sync,no_subtree_check,no_root_squash)
+   /data/nfs/rw 192.168.136.0/24(rw,sync,no_subtree_check,no_root_squash)
+   EOF
+   ```
+
+6. 重启加载nfs-server
+
+   ```bash
+   $ sudo exportfs -f
+   $ sudo systemctl reload nfs-server
+   ```
+
+7. 到其他节点上,安装nfs-utils并挂载进行测试
+
+   ```bash
+   # 1.安装nfs-utils
+   $ sudo yum install nfs-utils -y
+   # 2.挂载nfs远程节点\
+   $ sudo mkdir -p /mnt/nfs
+   $ sudo mount -t nfs 192.168.136.151:/data/nfs /mnt/nfs
+   # 3.测试读写权限\
+   $ sudo ls /mnt/nfs
+   ```
 
 ### 21.3.2 使用NFS进行挂载
 
+Pod中使用NFS如下,实现跨节点，跨容器的数据持久化存储。
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/pods/
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "v-nfs-pod"
+  namespace: default
+  labels:
+    app: "v-nfs-pod"
+spec:
+  containers:
+  - name: alpine-1
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    resources: {}
+    volumeMounts:
+    - name: volume-nfs
+      mountPath: /mnt/nfs # 将nfs服务路径/data/nfs挂载到容器中 /mnt/nfs
+
+  - name: alpine-2
+    image: 192.168.31.79:5000/alpine:latest
+    command: ["sh","-c"," sleep 3600"]
+    resources: {}
+
+    # 表示将volume-nfs-subpath对应的/data/nfs/rw/README.md，映射到容器的/mnt/nfs/README.md（单项更新）
+    volumeMounts:
+    - name: volume-nfs-subpath
+      mountPath: /mnt/nfs/README.md # 单文件映射，此处必须为绝对路径的文件名
+      subPath: README.md # 此处对应 /data/nfs/rw/README.md文件(对应configmap中数据键)
+
+  volumes:
+    - name: volume-nfs
+      nfs:
+        path: /data/nfs # 要挂载的nfs路径(远程具体目录)
+        server: 192.168.136.151 # nfs服务器地址
+        readOnly: false # NFS是否只读
+
+    - name: volume-nfs-subpath
+      nfs:
+        path: /data/nfs/rw/ # 确保该目录下有README.md文件
+        server: 192.168.136.151 
+        readOnly: false 
+  restartPolicy: Never
+```
+
+> [!Warning]
+>
+> 使用**subPath**挂载单文件，只会**单向更新**。即**（subPath方式）的容器内更新NFS文件Node节点上可以看到，但是Node节点上更新文件容器中看不到也不会更新**。但是如果Node节点外修改后，容器中无法加载新数据并继续在旧的基础上修改，则外面Node节点上文件也无法同步了。
+>
+> 所以，nfs不推荐使用subPath，问题比较多。如果非要用，则设置该文件只读，容器中无法修改。
+
+# 22. PV和PVC
+
+**持久卷（PersistentVolume，PV）** 是集群中的一块存储，可以由管理员**事先制备**， 或者使用[存储类（Storage Class）](https://kubernetes.io/zh-cn/docs/concepts/storage/storage-classes/)来**动态制备**。 持久卷是集群资源，就像节点也是集群资源一样。PV 持久卷和普通的 Volume 一样， 也是使用卷插件来实现的，只是它们拥有独立于任何使用 PV 的 Pod 的生命周期。 此 API 对象中记述了存储的实现细节，无论其背后是 NFS、iSCSI 还是特定于云平台的存储系统。
+
+**持久卷申领（PersistentVolumeClaim，PVC）** 表达的是用户对存储的请求。概念上与 Pod 类似。 Pod 会耗用节点资源，而 **PVC 申领会耗用 PV 资源**。Pod 可以请求特定数量的资源（CPU 和内存）。同样 PVC 申领也可以请求特定的大小和访问模式 （例如，可以挂载为 ReadWriteOnce、ReadOnlyMany、ReadWriteMany 或 ReadWriteOncePod， 请参阅[访问模式](https://kubernetes.io/zh-cn/docs/concepts/storage/persistent-volumes/#access-modes)）。
+
+***持久卷申领消费流程和基本卷消费流程如下：***
+
+![image-20241016191534769](./_media/image-20241016191534769.png)
 
 
-# 22. 
+
+> 注意对比lvm逻辑卷管理和PV,PVC的区别，有些相似但完全不同。
+
+## 22.0 api文档
+
++ 持久卷`PV`和`PVC` 介绍文档 https://kubernetes.io/zh-cn/docs/concepts/storage/storage-classes/
++ 存储类`StorageClass` 介绍文档： https://kubernetes.io/zh-cn/docs/concepts/storage/storage-classes/#storageclass-objects
++ 容器存储接口规范`CSI` 介绍文档： https://kubernetes.io/zh-cn/docs/concepts/storage/volumes/#csi
++ 动态卷制备构建 https://kubernetes.io/zh-cn/docs/concepts/storage/dynamic-provisioning/
+
+## 22.1 PV和PVC的生命周期
+
+**PV卷是集群的资源**，PVC申领是对这些资源的请求，也被用来执行对资源的申领检查。PV卷和PVC申领之间的互动遵循如下生命周期：
+
+1. **制备/构建 Provisioning**
+
+   + **静态制备（静态构建）**
+
+     有集群管理员在定义PVC申领前**提前创建好PV卷**。这些PV卷**带有真实存储的细节信息**，并且对集群用户可见（可用）。
+
+   + **动态制备（动态构建）**
+
+     不提前创建好PV卷，而是**在创建PVC申领时请求（指定）一个StorageClass存储类SC**，该存储类StorageClass里面**定义了provisioner制备器和存储配置的相关信息（如存储池地址，共享目录等）**。由该存储类StorageClass中的provisioner制备器根据配置信息动态的创建PV资源。
+
+     > 要想实现这个操作，前提是PVC必须设置StorageClass，否则无法动态构建该PV。可以使用第三方插件，或默认的DefaultStorageClass来实现PV的动态构建。
+
+   ![794174-20210425145341155-981554887-1](./_media/794174-20210425145341155-981554887-1.png)
+
+2. **绑定 Binding**
+
+   + **首先**，当用户创建一个PVC对象后，主节点会检测新的PVC对象，并且寻找与之匹配的PV卷，**找到PV卷后将二者绑定在一起**。
+   + **其次**，如果找不到对应的PV，则需要看PVC是否设置**StorageClass存储类**来决定**是否动态创建PV**。
+   + **然后**，如果**没有配置动态构建**，PVC将**一直处于未绑定的状态**，**直到**有与之**匹配的PV**后才会申领**绑定**关系。
+
+3. **使用 Using**
+   Pod将PVC当作存储卷来使用。当Pod使用PVC时，集群会通过PVC找到绑定的PV，并为Pod挂载该卷。**Pod一旦使用，则PVC和PV就处于绑定Bind状态。**为了保护数据，避免数据丢失的问题，**PV对象就会受到保护**，该PV**在集群系统就无法删除。**
+
+4. **回收 Reclaiming**
+   当用户不再使用该存储卷时，他们可以从API中将PVC对象删除，从而允许该资源被回收再利用。**集群会根据PV对象的回收策略来初始该数据卷PV**。回收策略有：`Retain`保留、`Recycle`回收（已废弃）、`Delete`删除。
+
+## 22.2 PVC的回收策略（针对PV）
+
++ `Retain`保留  **删除PVC，保留PV（推荐）** 
+
+  回收策略 `Retain` 使得用户可以手动回收资源。当 PVC 被删除时，PV 保留，数据不会被删除。**这个策略允许手动回收或重新绑定这个 PV 到新的 PVC**。管理员可以选择手动清理数据或重新使用该 PV。
+
++ `Recycle`回收（已废弃）
+
+  这种策略会将 PV 进行简单的“清空”（格式化操作），然后重新标记为 `Available`，使其可以被新的 PVC 使用。
+
+  > [!Warning]
+  >
+  > 回收策略 `Recycle` 已被废弃。取而代之的建议方案是使用动态制备。
+
++ `Delete`删除 **删除PVC，同时删除PV（动态构建的看SC中回收策略）**
+
+  对于支持 `Delete` 回收策略的卷插件，删除动作会将 PersistentVolume 对象从 Kubernetes 中移除，同时也会从外部基础设施中移除所关联的存储资产。 动态制备的卷会继承[其 StorageClass 中设置的回收策略](https://kubernetes.io/zh-cn/docs/concepts/storage/persistent-volumes/#reclaim-policy)， 该策略默认为 `Delete`。管理员需要根据用户的期望来配置 StorageClass； 否则 PV 卷被创建之后必须要被编辑或者修补。 参阅[更改 PV 卷的回收策略](https://kubernetes.io/zh-cn/docs/tasks/administer-cluster/change-pv-reclaim-policy/)。
+
+## 22.3 PV和PVC使用流程图
+
+**静态构建流程如下：**
+
+1. 当Pod使用PVC时，PVC会去集群中查找是否存在满足要求的PV
+2. 如果有就继续下去，如果没有Pod会一直卡住。直到有满足条件的PV被创建。
+
+**动态构建的流程如下：**
+
+1. 当Pod使用PVC时，PVC会先去集群中查找是否存在满足要求的PV。
+2. 如果没有满足条件的PV，则k8s会调用PVC中指明的StorageClass中的provisioner制备器，根据该StorageClass中配置存储的信息，动态的去申请满足要求的资源创建PV。
+3. 如果存储池无法满足要求，则Pod会一直卡住。直到有满足条件的PV被创建。
+
+![image-20241016200800548](./_media/image-20241016200800548.png)
+
+## 22.4 *PV的使用（静态构建）*
+
+1. 创建PV ，使用配置文件`test-pv-static.yaml`
+
+   ```yaml
+   apiVersion: v1
+   kind: PersistentVolume
+   metadata:
+     name: test-pv-static
+   spec:
+     capacity: # 表示该卷的资源和容量(目前只支持storage大小)
+       storage: 200Mi # 该卷的大小
+     volumeMode: Filesystem # 表示是当作已格式化的文件系统FileSystem使用(默认)；还是没有格式化的原始状态块Block(k8s不会自动格式化，有容器服务自己处理)
+     accessModes: # 挂在卷的访问模式
+       - ReadWriteOnce # 即RWO，表示卷只能被一个Node节点以读写方式挂载。具体见 22.5PV的accessMode章节
+     persistentVolumeReclaimPolicy: Retain # PVC被删除时该PV的回收策略，有Delete，Retain(默认值)，Recycle（已废弃）
+     storageClassName: "slow" # 表示该PV卷所属的StorageClass的名字(k8s中无内置). 空值意味着此卷不属于任何 StorageClass
+     mountOptions: # 挂载选项 ,针对不同的文件系统选项不同 如ro只读，rw读写，
+       - hard # hard用nfs表示强制挂载
+       - nfsvers=4.1 # 指定nfs版本
+     
+     # 一个PVC只能关联一个数据卷
+     nfs: # 挂载nfs硬盘
+       path: /data/nfs # nfs服务器上被挂载的目录
+       server: 192.168.136.151 # nfs服务器地址
+     # 加上下面就会报错
+     #hostPath:
+     #    path: /app
+   
+   ```
+
+2. 查看PV资源
+
+   ```bash
+   $ kubectl get pv test-pv-static
+   NAME             CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   REASON   AGE
+   test-pv-static   200Mi      RWO            Retain           Available           slow                    25m
+   # RWO即ReadWriteOnly访问模式
+   ```
+
+3. 创建PVC，使用配置文件`test-pvc-static.yaml`
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+   apiVersion: v1
+   kind: PersistentVolumeClaim # PVC资源
+   metadata:
+     name: test-pvc-static
+     namespace: default # 有命名空间
+     labels:
+       app: test-pvc-static
+   spec:
+     volumeMode: Filesystem # 表示预期PV应该是个文件系统（默认），可选值Block
+     storageClassName: default
+     accessModes: # 表示该pvc预期pv卷应该具备的访问权限（读写权限）
+     - ReadWriteOnce
+     resources: # 表示该pvc对pv的要求
+       requests: # 最小要求(pv卷大小要大于等于该值) **绑定基于此值**
+         storage: 1Mi
+       limits: # 最大要求,即pv要大于等于该值 （**只具有参考意义，不依据该值来选择PV）
+         storage: 200Mi  
+     storageClassName: "slow" # 要求pv的storageclass必须要有且是slow
+     # 上面是模糊匹配，当然你也可以通过label selector进行精确匹配（二者可以同时存在）
+     # selector:
+     #   matchLabels:
+     #     app: pv-static
+     #   matchExpressions: # 基于 表达式匹配 In，Notin，Exists，DoesNotExist
+     #   - {key: environment, opeartor: In, values: [dev]} 
+     # 下面表示收到绑定，不是PVC自己去找PV
+     #volumeName: test-pv-static # 表示当前pvc指名道姓找名字为test-pv-static的PV
+   ```
+
+4. 查看PVC资源，PV
+
+   ```bash
+   $ kubectl get pvc test-pvc-static
+   NAME              STATUS   VOLUME           CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+   test-pvc-static   Bound    test-pv-static   200Mi      RWO            slow           117s
+   
+   $ kubectl get pv test-pv-static
+   NAME             CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                     STORAGECLASS   REASON   AGE
+   test-pv-static   200Mi      RWO            Retain           Bound    default/test-pvc-static   slow                    44m
+   ```
+
+   可用`kubectl describe pv/pvc`查看PV和PVC具体信息
+
+5. Pod使用该PVC（**也可以在Pod创建PVC不用分开**）
+   ```bash
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "test-pv-static-pod"
+     namespace: default
+     labels:
+       app: "pv-static-pod"
+   spec:
+     containers:
+     - name: alpine
+       image: 192.168.31.79:5000/alpine:latest
+       command: ["sh","-c"," sleep 3600"]
+   
+       # 由此可以看出，只是volume定义的类型不同，用法还是一样的
+       volumeMounts:
+       - name: pv-static
+         mountPath: /app
+         # subPath:xxx # 当然可以使用subpath
+     volumes:
+       - name: pv-static
+         persistentVolumeClaim: # 使用PVC类型
+           claimName: test-pvc-static # pvc的名字，必须完全一样，表示使用哪个PVC和关联的PV
+           readOnly: false # 是否只读，默认为false
+     restartPolicy: Never
+   ---
+   ```
+
+6. 测试发现可用，挂载路径存在
+
+7. 如果出现问题可以`kubectl describe pod/pvc/pv` 一路查找下去
+
+## 22.5 PV的accessMode（卷访问模式）
+
+定义PV时需要定义PV的卷访问模式： 
+
++ `ReadWriteOnce` 即`RWO`，表示卷可以被一个Node节点以读写方式挂载。(**只允许一个Node节点上的多Pod读写**)
++ `ReadOnlyMany`即`ROX`，表示卷可以被多个Node节点以只读方式挂载。（**只允许多Node节点，多Pod同时读**）
++ `ReadWriteMany`即`RWX`，表示卷可以被多个节点以读写方式挂载。（**允许多Node节点，多Pod同时读写**）
++ `ReadWriteOncePod`即`RWOP`，表示卷可以被单个 Pod 以读写方式挂载。（**只允许一个Node节点上的一个Pod同时读写**）
+
+> [!Attention]
+>
+> 每个卷同一时刻只能以一种访问模式挂载，即使该卷能够支持多种访问模式。
+
+> [!Warning]
+>
+> Kubernetes 使用卷访问模式来匹配 PersistentVolumeClaim 和 PersistentVolume。 在某些场合下，卷访问模式也会限制 PersistentVolume 可以挂载的位置。 卷访问模式并**不会**在存储已经被挂载的情况下为其实施写保护。 即使访问模式设置为 ReadWriteOnce、ReadOnlyMany 或 ReadWriteMany，它们也不会对卷形成限制。 例如，即使某个卷创建时设置为 ReadOnlyMany，也无法保证该卷是只读的。(**权限访问控制只是在K8s集群内部，并不能保证所有层面实现绝对的一致性**)
+
+## 22.6 PV的状态status
+
+可以通过`kubectl get pv`获取PV状态，一共有下面几组：
+
++ `Available` 空闲，未被PVC绑定
++ `Bound` 已经被PVC绑定了
++ `Released` PVC被删除，关联存储资源尚未被集群回收，且PV未被重新使用
++ `Failed` 卷的自动回收操作失败(不可绑定)
+
+> 可以使用`kubectl describe persistentvolume <name> `查看已绑定到 PV 的 PVC 的名称
+
+## 22.7 存储类StorageClass
 
 
 
-
+## 22.10 硬盘,PV,PVC,CSI,StorageClass,provisioner,pod关系
 
 
 
