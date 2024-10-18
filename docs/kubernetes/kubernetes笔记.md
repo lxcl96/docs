@@ -7088,7 +7088,46 @@ PV的动态制备有很多插件可以选择，下面以两种方案操作：
    persistentvolumeclaim/test-pvc-static                Bound    test-pv-static                             200Mi      RWO            slow                  22h
    ```
 
-### 22.8.3 案例二 问题排查
+### 22.8.3 如果PVC中StorageClass类目写错了如何排查?
+
+1. 查看服务Pod描述信息，event事件提示处于`Pending`状态
+
+   ```bash
+   $ kubectl describe pod nfs-csi-pod-error
+   Events:
+     Type     Reason            Age   From               Message
+     ----     ------            ----  ----               -------
+     Warning  FailedScheduling  28s   default-scheduler  0/3 nodes are available: 3 pod has unbound immediate PersistentVolumeClaims.
+   ```
+
+2. 查看PV，PVC状态。PV未创建，PVC处于`Pending`状态
+
+   ```bash
+   $ kubectl get pvc,pv
+   NAME                                                 STATUS    VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS           AGE
+   persistentvolumeclaim/nfs-csi-pvc-error              Pending                                                                        nfs.csi.k8s.io         115s
+   
+   NAME                                                        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                                  STORAGECLASS           REASON   AGE
+   
+   ```
+
+3. **查看PVC的描述信息（除了Pod可以看日志，其他资源都应该通过describe排查）**
+
+   **找到问题，提示名字叫**`nfs.csi.k8s.io`**的**`StorageClass`**存储类不存在**。去查看一下刚才创建的PVC和存储类SC，发现**PVC中将存储类中SC名字写错了，误写为SC的provisioner了**
+
+   ```bash
+   $ kubectl describe persistentvolumeclaim/nfs-csi-pvc-error
+   Events:
+     Type     Reason              Age                  From                         Message
+     ----     ------              ----                 ----                         -------
+     Warning  ProvisioningFailed  2s (x11 over 2m26s)  persistentvolume-controller  storageclass.storage.k8s.io "nfs.csi.k8s.io" not found
+   ```
+
+4. **PVC的spec配置不能热更新，需要将原来的PVC删除，重新创建**，PVC中StorageClass改为正常的已存在的
+
+5. **如果是其他问题，就需要进入provisioner（logs命令）中查看具体日志了**
+
+### 22.8.4 案例二 问题排查
 
 #### 22.8.3.1 出现问题排查顺序
 
@@ -7133,15 +7172,237 @@ RBAC权限问题，制备器`nfs-client-provisioner`没有权限获取`storagecl
 
 `nfs-provisioner-rbac.yaml`中配置有问题，视频给的就有问题（ClusterRoleBinding没有namesapce）
 
-## 22.9 注意
+## 22.9 ***注意事项***
 
-一个PV只对应一种数据卷类型（如hostpath，nfs二选一）
-一个PVC只能和一个PV对应，即如果一个pv已经被PVC绑定了，那么这个pv就不会再被其他pv绑定了（除非pvc中手动指明volumeName为这个pv）
-一个Pod可以使用多个PV
-PV是集群级别资源，没有命名空间namespace
-PVC有命名空间
+> [!Note]
+>
+> 1. PVC中定义需要存储资源的大小和关联StorageClassName（sc名字）
+> 2. 文件系统如NFS的配置信息（如服务地址等），根据不同的插件来配置。可以在StorageClass也可以在provisioner中
+> 3. SorageClass中肯定要配置provisioner制备器
+
++ **一个PV只对应一种文件系统卷，但是多个PV可以同时连接到一个文件系统卷**
++ **一个PVC只能和一个PV对应，即如果一个pv已经被PVC绑定了，那么这个pv就不会再被其他pv绑定了**（除非pvc中手动指明volumeName为这个pv）
++ Pod和PV的关系是多对多，但是**只推荐使用1对多（数据隔离）**
++ **PV是集群级别资源，没有命名空间namespace，PVC有命名空间**
+
+![image-20241018100942604](./_media/image-20241018100942604.png)
 
 ## 22.10 硬盘,PV,PVC,CSI,StorageClass,provisioner,pod关系
+
+此处只针对动态制备PV流程来说，因为静态制备不涉及CSI和Storage、provisioner
+
+流程图见：[22.3 PV和PVC使用、制备流程图（静态、动态）](#22.3 PV和PVC使用、制备流程图（静态、动态）)
+
++ **硬盘**即文件系统，如NFS，hostPath，cephFS 等等
++ **PV**直接关联到硬盘，类似于LVM的逻辑卷，**是一种抽象存储卷、抽象硬盘，用于直接消费**
++ **PVC**关联到**PV**，表示向PV申请资源的大小，是对存储资源的请求。
++ **CSI**（Container Storage Interface）是一种接口，描述动态制备PV的规范。其主要包含**CSI驱动和provisioner制备器**，用于制备PV。具体的实现如：[案例](#22.8.1 案例一)
++ **StorageClass**存储类，用于指明动态制备器。将PVC和provisioner关联起来。
++ **provisioner**制备器，创建PV的具体插件，一般以Pod形式存在。制备PV同时需要配置RBAC权限，否则无法获取集群内资源。
++ **Pod**消费者，直接在容器中消费PVC（内部已经配置好请求存储资源大小），从而无效关心PV的存在。
+
+```shell
+# 动态制备pv流程
+pod-->PVC(请求大小)-->storageclass-->provisioner-->pv
+```
+
+# 23. Job
+
+**Job 表示一次性任务（以Pod形式），运行完成后就会停止。**
+
+Job 会创建一个或者多个 Pod，并将继续重试 Pod 的执行，直到指定数量的 Pod 成功终止。 随着 Pod 成功结束，Job 跟踪记录成功完成的 Pod 个数。 **当数量达到指定的成功个数阈值时，任务（即 Job）结束**。
+
+ **删除 Job （kubectl delete）的操作会清除所创建的全部 Pod**。 
+
+**挂起 Job （配置文件中suspend改为true）的操作会删除 Job 的所有活跃 Pod，直到 Job 被再次恢复执行**。
+
+## 23.0 api文档
+
++ Job介绍文档：https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/job
++ Job api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/job-v1/#Job
+
+## 23.1 使用Job
+
++ 命令创建
+
+  ```bash
+  # 创建一个名字叫test-job-1的job，使用busybox镜像执行 date;sleep 60命令
+  $ kubectl create job test-job-1 --image=192.168.31.79:5000/busybox:1.28.4 -- date;sleep 60
+  # 创建一个名字叫test-job-2的job，其镜像等等配置信息来自于cronjob 一个定时job
+  $ kubectl create job test-job-2 --from=test-cronjob-1
+  ```
+
++ 配置文件创建
+
+  ```yaml
+  # https://kubernetes.io/docs/concepts/workloads/controllers/job/
+  apiVersion: batch/v1
+  kind: Job # 资源类型
+  metadata:
+    name: test-job-3 # job的名字
+    namespace: default
+    labels:
+      app: test-job
+  spec:
+    parallelism: 2 # 控制Pod的并发数量(如当处理多文件时，会自动创建parallelism个pod来加速)
+    # parallelism是针对该completions而言的，completions为几，job就会依据parallelism创建parallelism个并发pod,直到paralleism个成功的，最大尝试失败backoffLimit次
+    completions: 2 # 指任务job应该运行并预期成功（即completed，pod的状态）完成的Pod个数.为空表示任何pod成功都视为job成功
+    completionMode: "NonIndexed" # 默认 NoIndexed 即不要求每个pod都成功，但是最后成功个数必须大于等于completions。Indexed要求每个pod都成功
+    backoffLimit: 5 # 指定标记此任务失败之前的最大尝试数，默认为6
+    activeDeadlineSeconds: 10 # 系统尝试终止job前可以持续活跃的持续时间（从启动时间开始算）。必须为正整数。当任务被挂起后恢复，计数器会重置
+    ttlSecondsAfterFinished: 3600 #表示任务完成后（成功或失败）多久后，自动将Pod删除。（不定义就不删除） 0表示立刻删除
+    suspend: false # 是否暂停job，默认为false。true，挂起，不会创建pod。（从false变为true会删除所有Pod）
+    #selector: # 对应Pod计数器completions，系统会自动添加匹配的,自己不要加会报错
+    #  matchLabels:
+    #    app: test-job-pod
+    template: # Pod模板
+      metadata:
+        name: test-job-3-pod # pod的名字
+        labels:
+          app: test-job-pod
+      spec:
+        containers:
+        - name: busybox # 容器名
+          image: 192.168.31.79:5000/busybox:1.28.4
+          command: ['sh', '-c', 'date;echo "ending..."']
+        restartPolicy: OnFailure
+        dnsPolicy: ClusterFirst
+  ---
+  ```
+
++ 验证
+
+  ```bash
+  # 查看job
+  kubectl get job
+  # 获取Pod状态
+  kubectl get pod xxx
+  # 查看Pod运行日志
+  kubectl logs xxx
+  ```
+
+> [!Note]
+>
+>    **parallelism是针对该completions而言的，completions为几，job就会依据parallelism值创建parallelism个并发pod,直到paralleism个成功的，最大尝试失败backoffLimit次**
+
+## 23.2 注意事项
+
++ **Job的完成个数（completions），就是指重复创建几个Pod（排除失败的）**。
++ `parallelism`表示可以并发创建几个pod
++ 每一个成功或失败Pod，都会执行同一条命令（即容器command）。
++ `completionMode`表示什么情况才认为是完成的
+  + `NoIndexed` 不给每个Pod分配index号（可以看成id），只要最后成功完成的Pod等于`completions`即可 。**适合无状态的服务**
+  + `Indexed` 不给每个Pod分配index号（可以看成id），只要最后成功完成的Pod等于`completions`即可 （**如果Pod失败了，不会新建index的值，而是在该index基础上重试**）。**适合有状态的服务**
++ `ttlSecondsAfterFinished`表示job执行完成（成功或失败）后，多少秒后自动删除pod。
+
+# 23. CronJob
+
+表示定时调度的Job，类似于Linux的crontab
+
+CronJob 用于执行排期操作，例如备份、生成报告等。 一个 CronJob 对象就像 Unix 系统上的 **crontab**（cron table）文件中的一行。 它用 [Cron](https://zh.wikipedia.org/wiki/Cron) 格式进行编写， 并周期性地在给定的调度时间执行 Job。
+
+> 注意：**自动调度的时间是基于master节点上kube-controller-manager的，默认时区也是给基于它。**
+
+## 23.0 api文档
+
++ CronJob介绍文档： https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/cron-jobs/#writing-a-cronjob-spec
++ CronJob api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/cron-job-v1/
+
+## 23.1 时间表达式
+
+```bash
+    # linux是5位，没有秒概念
+    ┌───────────── minute (0–59)
+    │ ┌───────────── hour (0–23)
+    │ │ ┌───────────── day of the month (1–31)
+    │ │ │ ┌───────────── month (1–12)
+    │ │ │ │ ┌───────────── day of the week (0–6) (Sunday to Saturday;
+    │ │ │ │ │ 7 is also Sunday on some systems)
+    │ │ │ │ │
+    │ │ │ │ │
+    * * * * * <command to execute>
+```
+
+- `\`表示转义
+- 逗号（**`,`**）表示列举，例如： **`1,3,4,7 \* \* \* \* echo hello world`** 表示，在每小时的1、3、4、7分时，打印"hello world"。
+- 连词符（**`-`**）表示范围，例如：**`1-6 \* \* \* * echo hello world`** ，表示，每小时的1到6分钟内，每分钟都会打印"hello world"。
+- 星号（**`\*`**）代表任何可能的值。例如：在“小时域”里的星号等于是“每一个小时”。
+- 百分号(**`%`**) 表示“每"。例如：**`\*%10 \* \* \* \* echo hello world`** 表示，每10分钟打印一回"hello world"。
+- 斜杠(`/`)表示每过去。例如：**`\*/3 \* \* \* \* echo hello world`** 表示，每过去3，6，9，12,..分钟打印一次hello world。
+- 问好(`?`)**只能用于星期**表示不关心，不指定，用于避免冲突。而星号`\*`为每个。
+
+## 23.2 使用CronJob
+
++ 命令行创建
+
+  ``` bash
+  # 创建定时任务：名字是test-cronjob-1，表示每天每小时的0，5，15，..55分都执行命令date
+  $ kubectl create cronjob test-cronjob-1 --image=192.168.31.79:5000/busybox:1.28.4 --schedule='0/5 * * * ?' -- date
+  ```
+
++ 配置文件创建
+
+  ```yaml
+  # https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
+  apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    name: test-cronjob-2
+    namespace: default
+  spec:
+    schedule: "*/1 * * * *" # 时间表达式:没过一分钟执行一次job
+    #timeZone: "Asia/Shanghai" # 默认为kube-controller-manager的时区（1.23不支持）
+    concurrencyPolicy: "Allow" # 是否允许并发执行。Allow、Forbid、Replace（上一个job没执行完结束，创建新的）
+    startingDeadlineSeconds: 10 #当job因为某些原因错过预定时间，不超过该秒可以继续执行。错过的job的pod状态为失败
+    suspend: false # 挂起后续的job，默认为false。
+    successfulJobsHistoryLimit: 5 # 保留从成功作业（就是pod）数，默认为3.必须为正整数(0可以)
+    failedJobsHistoryLimit: 2 # 保留失败状态的作业（就是Pod）数，默认为1，必须为正整数（0可以）
+    jobTemplate: # Job模板,描述job
+      spec:
+        template: # pod模板.描述pod
+          spec:
+            containers:
+            - name: busybox
+              image: 192.168.31.79:5000/busybox:1.28.4
+              args: ['/bin/sh', '-c', 'date; echo Hello from the Kubernetes cluster']
+            restartPolicy: OnFailure
+  ```
+
++ 验证
+
+  ```bash
+  # 查看cronjob
+  kubectl get cronjob
+  # 获取Pod状态
+  kubectl get pod xxx
+  # 查看Pod运行日志
+  kubectl logs xxx
+  # 查看自动调度细节
+  kuebctl describe cj xxxx
+  ```
+
+# 24. InitContainer
+
+在服务容器开始前执行，因为`postStart`钩子函数无法保证一定会在服务容器前执行，所以一些操作可以在InitContainer中执行。
+
+> [!Note]
+>
+> + InitContainer执行完会退出（删除，不论是成功还是失败），否则会一直卡住。
+> + InitContainer超过最大失败次数，就不会再启动服务容器，整个Pod将认为失败。、
+> + Init 容器不支持 `lifecycle`、`livenessProbe`、`readinessProbe` 或 `startupProbe`
+> + Init 容器与主应用容器共享资源（CPU、内存、网络），但不直接与主应用容器进行交互。 不过这些容器可以使用**共享卷进行数据交换**。
+> + Init容器比服务容器先执行，多个Init容器的按照**从上到下**定义的顺序，顺序执行。（前一个成功执行完退出，后一个才会执行）。
+
+## 24.0 api文档
+
++ InitContainer介绍文档：https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/init-containers/
++ InitContainer api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+
+## 24.1 使用InitContainer
+
+具体使用参考：[19.6 解决subPath单文件映射覆盖不可热更新问题](#19.6 解决subPath单文件映射覆盖不可热更新问题)
+
+
 
 
 
