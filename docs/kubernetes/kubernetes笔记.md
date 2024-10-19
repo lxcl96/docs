@@ -7404,6 +7404,124 @@ CronJob 用于执行排期操作，例如备份、生成报告等。 一个 Cron
 
 
 
+# 25. Taint(污点) 和Toleration(容忍)
+
+参考文档：https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+**Taint污点是作用于Node节点上的，效果就是该Node节点会排斥所有Pod（除非Pod定义有Toleration容忍该Taint污点）。**类似于给Node节点打标签Label，用于描述当前Node节点的状态如CPU受限、Memory告警等，告诉调度器不要将Pod放在该Node节点上运行。
+
+**Toleration容忍应用于Pod上，用于告诉调度器当前Pod能接收哪些Taint污点，即可以把该Pod放到具有指定污点taint的node节点上。**注意：这不意味着具有指定taint污点的node节点比其他没有污点的节点调度pod有更高的优先级，实际上**具有任何taint污点的node节点和没有污点的node节点接收pod的优先级是一样**。如果想实现类似优先级的效果，试试节点亲和性（Node Affinity）
+
+**污点和容忍度（Toleration）相互配合，可以用来避免 Pod 被分配到不合适的节点上**。 每个节点上都可以应用一个或多个污点，这表示对于那些不能容忍这些污点的 Pod， 是不会被该节点接受的。
+
+> [!Note]
+>
+> + 污点代表拒绝，默认拒绝所有Pod ，除非你定义了容忍。
+> + 如过一个节点有多个污点，那么需要pod需要容忍所有的污点，才能调度到该节点上
+>
+> 举个例子：如node1上有污点如gpu=yes，node2无污点。那么定义的pod中必须要有容忍该污点（gpu）的定义否则所有pod就只会调度到node2上。
+
+## 25.1 effect污点的影响
+
+`effect`表示具有污点的node节点对其上运行pod的影响。例如刚开始有pod在运行，后面才给node节点打上污点。
+
+`effect`具有下面三类值：
+
++ `NoSchedule`(**不可调度**) 
+
+  除非具有匹配的容忍度配置，否则**新的Pod**不会被调度到带有污点的节点上。（**打污点前已经运行的Pod不会被驱逐**）
+
++ `NoExecute`（**驱逐**）
+
+  主要用来表示正在节点上运行的节点，按配置又可以分为下面三种：
+
+  + **Pod配置没有容忍该类污点**，则pod马上被驱逐
+  + **Pod配置有容忍该类污点，但是没有指定容忍的属性**`tolerationSeconds`，则pod会一直在节点上运行
+  + **Pod配置有容忍该类污点，且指定了容忍的属性**`tolerationSeconds`，那么pod会在该Node节点上运行`tolerationSeconds`秒，然后被驱逐。（驱逐后pod有可能被重新调度到该节点，然后再驱逐，依次往返....）
+
++ `PreferNoSchedule`（**倾向不可调度**）
+
+  即控制面板master尽可能不将Pod运行具有该effect效果的Node上，但是不能完全保证会避免。
+
+## 25.1 taint污点的使用
+
+```bash
+# 1.给k8s-node2节点添加污点memory，并指明影响为NoSchedule
+$ kubectl taint node k8s-node2 memory=low:NoSchedule #
+# 2.查看k8s-node2节点上污点
+$ kubectl describe node k8s-node2|grep Taint # 只能看到一行，多行去掉grep
+# 3.删除k8s-node2上的污点 memory=low:NoSchedule(删掉就是后面加一个-)
+$ kubectl taint node k8s-node2 memory=low:NoSchedule- # 删除label标签也是这样
+```
+
+## 25.2 toleration容忍的使用
+
+1. 给k8s-node2打上污点 `app=low:NoSchedule`
+
+   ```bash
+   # NoSchedule不影响已经运行的pod
+   $ kubectl taint node k8s-node2 cpu=low:NoSchedule
+   ```
+
+   ![image-20241019171918903](./_media/image-20241019171918903.png)
+
+2. 创建Pod，发现新Pod无论如总是只允许在k8s-node1上（Pod中未配置容忍）
+
+3. 给k8s-node2打上污点 `memory=minimal:NoExcute`
+
+   ```bash
+   # NoExcute影响已经在运行的Pod
+   $ kubectl taint node k8s-node2 memory=minimal:NoExecute
+   ```
+
+4. 观察k8s-node2上pod，发现都被删掉了（**因为默认pod没有任何容忍**）
+
+   ![image-20241019170738719](./_media/image-20241019170738719.png)
+
+   打上两个污点后发现都没有了，**已完成的，失败的，运行中都迁移到k8s-node1上了**（busybox是单纯的pod没有重启，所以也不会迁移到k8s-node1）
+
+5. 创建Pod（或者修改已存在的deploy，daemonset等），添加容忍1`cpu=low:NoSchedule` 容忍2`memory=minimal:NoExecute`
+
+   **容忍是配置在Pod中的，和containers同级别**
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/pods/
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: "test-taint-1"
+     namespace: default
+     labels:
+       app: "test-taint"
+   spec:
+     tolerations: # 匹配的容忍，三元组
+     - key: cpu # node污点的名字
+       operator: Equal # 动作，有Equal（默认）和Exists（类似于通配符，匹配任何value）。
+       value: low #node污点cpu的值 （如果operator为Exists，value应该留空）
+       effect: "" # 匹配污点的effect。空值表示匹配所有effect,有NoSchedule，NoExecute，PreferNoSchedule。
+       #tolerationSeconds: 30 # 当effect为NoExecute该字段才有效，表示运行Pod在node节点上运行多久才会被驱逐（后面又可能再次被调度运行该pod）
+     - key: memory 
+       operator: Exists # 动作，有Equal（默认）和Exists（类似于通配符，匹配任何value）。
+       # value: low #operator为Exists，value应该留空
+       effect: NoExecute # （如果配置了tolerationSeconds则effect必须为NoExecude）。NoExecute表示驱逐
+       tolerationSeconds: 30 # 当表示运行Pod在node节点上运行30秒后才会被驱逐（如果是deployment类型后面又可能再次被调度运行该pod）
+     containers:
+     - name: busybox
+       image: 192.168.31.79:5000/busybox:1.28.4
+       command: ["sh","-c"," sleep 60"]
+       resources: {}
+     restartPolicy: Never
+   ```
+
+6. 验证Pod可以创建到k8s-node2上
+
+   ![image-20241019175440673](./_media/image-20241019175440673.png)
+
+> [!Attention]
+>
+> 1. **如果Node具有多个污点，如果想让Pod调度在该节点上，则该Pod必须容忍所有的污点**
+> 2. 如果是Deployment，StatefulSet等类型，配置了`effect=NoExecute`和`tolerationSeconds`那么pod会在node节点上运行`tolerationSeconds`秒后将其移除，但是后面有可能会再次调度到该节点上，依次持续下去
+
 
 
 # k8s调试模式
