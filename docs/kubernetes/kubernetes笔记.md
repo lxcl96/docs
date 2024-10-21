@@ -7524,6 +7524,505 @@ $ kubectl taint node k8s-node2 memory=low:NoSchedule- # 删除label标签也是�
 
 
 
+# 26. Affinity亲和力
+
+> [!Tip]
+>
+> 1. **NodeAffinity节点亲和力基于label标签（node节点）**
+> 2. **PodAffinity和PodAntiAffinity基于Pod拓扑分布约束和label标签（node节点）**
+
+亲和力指节点亲和力，**它是Pod的一种属性（在Pod配置文件中配置）**使得Pod能够被吸引到具有一类特点的节点上。这可能处于一种偏好，也可能是硬性要求。（与污点相反）
+
+你可以约束一个 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 以便**限制**其只能在特定的[节点](https://kubernetes.io/zh-cn/docs/concepts/architecture/nodes/)上运行， 或优先在特定的节点上运行。有几种方法可以实现这点， 推荐的方法都是用[标签选择算符](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/labels/)来进行选择。 通常这样的约束不是必须的，因为调度器将自动进行合理的放置（比如，将 Pod 分散到节点上， 而不是将 Pod 放置在可用资源不足的节点上等等）。但在某些情况下，你可能需要进一步控制 Pod 被部署到哪个节点。例如，确保 Pod 最终落在连接了 SSD 的机器上， 或者将来自两个不同的服务且有大量通信的 Pod 被放置在同一个可用区。
+
+你可以使用下列方法中的任何一种来选择 Kubernetes 对特定 Pod 的调度：
+
+- 与[节点标签](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#built-in-node-labels)匹配的 [nodeSelector](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#nodeSelector)
+- [亲和性与反亲和性](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity)
+- [nodeName](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#nodename) 字段
+- [Pod 拓扑分布约束](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#pod-topology-spread-constraints)
+
+## 26.0 api文档
+
++ 介绍文档 https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/
++ NodeAffinity api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#NodeAffinity
++ PodAffinity api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodAffinity
++ PodAntiAffinity api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodAntiAffinity
+
+## 26.1 operator操作符
+
+对于NodeAffinity中`nodeSelector`和PodAffinity中`labelSelector`、PodAntiAffinity中`labelSelector`基于标签的选择器，操作符operator都具有以下操作：
+
+|            操作符            |                行为                | 适用于                                                       |
+| :--------------------------: | :--------------------------------: | ------------------------------------------------------------ |
+|      `In`(首字母要大写)      |    标签值存在于提供的字符串集中    | nodeSelector（NodeAffinity）<br />labelSelector （PodAffinity, PodAntiAffinity） |
+|    `NotIn`(首字母要大写)     |   标签值不包含在提供的字符串集中   | nodeSelector（NodeAffinity）<br />labelSelector （PodAffinity, PodAntiAffinity） |
+|    `Exists`(首字母要大写)    |      对象上存在具有此键的标签      | nodeSelector（NodeAffinity）<br />labelSelector （PodAffinity, PodAntiAffinity） |
+| `DoesNotExist`(首字母要大写) |     对象上不存在具有此键的标签     | nodeSelector（NodeAffinity）<br />labelSelector （PodAffinity, PodAntiAffinity） |
+|      `Gt`(首字母要大写)      | 字段值将被解析为整数，greater than | nodeSelector（NodeAffinity）                                 |
+|      `Lt`(首字母要大写)      |  字段值将被解析为整数，less than   | nodeSelector（NodeAffinity）                                 |
+
+## 26.2 k8s支持的核心字段(matchFields)
+
+### 节点支持的 `matchFields` 字段：
+
+- `metadata.name`：节点的名称。
+- `spec.unschedulable`：节点是否被标记为不可调度（用于手动设置节点为不可调度状态）。
+- `status.phase`：Pod 的当前状态，常见状态包括：
+  - `Running`：节点正在运行并且健康。
+  - `Pending`：节点未就绪。
+  - `Terminating`：节点正在终止。
+  - `Unknown`：节点状态未知。
+
+### Pod 支持的 `matchFields` 字段：
+
+- `metadata.name`：Pod 的名称。
+- `metadata.namespace`：Pod 所在的命名空间。
+- `spec.nodeName`：Pod 所调度到的节点的名称。
+- `status.phase`：Pod 的当前状态，常见状态包括：
+  - `Pending`：Pod 正在等待调度。
+  - `Running`：Pod 正在运行。
+  - `Succeeded`：Pod 已成功完成。
+  - `Failed`：Pod 已失败。
+  - `Unknown`：Pod 状态未知。
+
+## 26.3 亲和力两种类型
+
+**无论是NodeAffinity，PodAffinity还是PodAntiAffinity都具有以下两种类型（属性）：**
+
+- `requiredDuringSchedulingIgnoredDuringExecution`： 调度器只有在规则被满足的时候才能执行调度。此功能类似于 `nodeSelector`， 但其语法表达能力更强。（**必须满足**）
+- `preferredDuringSchedulingIgnoredDuringExecution`： 调度器会尝试寻找满足对应规则的节点。如果找不到匹配的节点，调度器仍然会调度该 Pod。（**倾向于满足，但是可以不满足**）
+
+> [!Note]
+>
+> 在上述类型中，`IgnoredDuringExecution` 意味着如果**节点标签（不是affinity）**在 Kubernetes 调度 Pod 后发生了变更，**Pod 仍将继续运行**。**更新了affinity,pod会立即发送变化**，除了pod类型直接创建的。
+
+## 26.4 NodeAffinity 节点亲和力
+
+> [!Attention]
+>
+> 1. 根据已存在的node节点上label标签，决定新 Pod 应该调度到具有特定标签的node节点上。（**根据标签选择node**）
+> 2. 通过操作符动作`NotIn`和`DoesNotExist`实现node节点的反亲和性
+
+**下面Pod使用的nodeAffinity实现的效果：**
+
+1. node节点必须有标签`kubernetes.io/os=linux`
+2. node节点必须有标签`type=microservices`
+3. 优先选择具有`label-2=value-2`标签的节点（权重99）
+4. 其次选择具有`label-1=value1`标签的节点（权重10）
+5. 如果3，4要求都无法满足，则根据内部算法选择一个节点（**必须满足1，2**）运行pod
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/pods/
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "node-affinity-pod"
+  namespace: default
+  labels:
+    app: "node-affinity"
+spec:
+  affinity: # 亲和力
+    nodeAffinity: # 使用节点亲和力
+      requiredDuringSchedulingIgnoredDuringExecution: # node节点必须要满足的条件
+        nodeSelectorTerms: # 使用的nodeSelector(node标签)
+          - matchExpressions:
+              - key: kubernetes.io/os # 这个node标签是k8s自动给所有集群内linux机器打上的
+                operator: In # 首字母要大写
+                values: 
+                - linux
+              - key: type # 这个node标签是我们手动添加的(用下面的matchFields获取内置信息代替这个)
+                operator: In
+                values: ["microservices"]
+                
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 99 #权重,表示优先级(权重值越高,优先级越高)
+        preference:
+          matchExpressions:
+          - key: label-2
+            operator: In # 如果此处变为NotIn，那么就是优先不匹配label-2=value-2的节点
+            values:
+            - value-2
+      - weight: 10
+        preference:
+          matchLabels:
+            label-1: value-1
+  containers:
+  - name: busybox
+    image: 192.168.31.79:5000/busybox:1.28.4
+    command: ["sh","-c"," sleep 3600"]
+    resources: {}
+  restartPolicy: Always
+```
+
+**调整：将**`In value-2`**改为**`NotIn value-2`则节点就有些落到满足`label-1=value-1`的节点（当然不是能绝对避免`label-2=value-2`）
+
+## 26.5 PodAffinity Pod亲和力
+
+> [!Attention]
+>
+> 1. 根据已经存在的 Pod 标签，将新 Pod 调度到具有特定标签的、已有 Pod 所在的node节点上。（**根据现有pod选择node，同一节点**）
+> 2. Pod反亲和力依赖于**Pod的拓扑ttopology分布约束**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
+
+**1. 演示操作前，需要给node节点添加特殊标签即topology拓扑属性**
+
+```bash
+# 1.剪去k8s-master上的所有污点（k8s-node1和k8s-node2上的在nodeAffinity中已经去除了）
+$ kubectl taint node k8s-master node-role.kubernetes.io/master:NoSchedule-
+# 2.给k8s-master k8s-node1 k8s-node2添加拓扑标签
+$ kubectl label no k8s-master topology.kubernetes.io/zone=R # 表示master节点在拓扑区域R中
+$ kubectl label no k8s-node1 k8s-node2 topology.kubernetes.io/zone=V # 表示node1，node2节点在拓扑区域V中
+
+# 3.查看现有pod的标签
+$ kubectl get pod -o wide --show-labels
+NAME                            READY   STATUS    RESTARTS       AGE     IP               NODE         NOMINATED NODE   READINESS GATES   LABELS
+centos                          1/1     Running   12 (44h ago)   11d     10.244.36.114    k8s-node1    <none>           <none>            run=centos
+nginx-deploy-8655f46645-dhnxh   1/1     Running   0              2m12s   10.244.36.124    k8s-node1    <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s1
+nginx-deploy-8655f46645-jpxcc   1/1     Running   0              2m12s   10.244.169.148   k8s-node2    <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s2
+nginx-deploy-8655f46645-rfgwk   1/1     Running   0              2m12s   10.244.235.208   k8s-master   <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s3
+```
+
+**2. 创建定义了拓扑分布约束的deploy-1（给下面PodAffinity演示使用）**
+
+deployment-1
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s1-topology-deploy
+  namespace: default
+  labels:
+    app: topology-deploy
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nginx
+        security: s1
+    spec:
+      topologySpreadConstraints: #必须定义topologykey
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone #以zone为划分（node必须具有该标签）
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: nginx
+      containers:
+      - name: nginx
+        image: 192.168.31.79:5000/nginx:latest
+        imagePullPolicy: IfNotPresent
+        resources: {}
+      restartPolicy: Always
+```
+
+deployment-2
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s2-topology-deploy
+  namespace: default
+  labels:
+    app: topology-deploy
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nginx
+        security: s2
+    spec:
+      topologySpreadConstraints: #必须定义topologykey
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone #以zone为划分（node必须具有该标签）
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: nginx
+      containers:
+      - name: nginx
+        image: 192.168.31.79:5000/nginx:latest
+        imagePullPolicy: IfNotPresent
+        resources: {}
+      restartPolicy: Always
+```
+
+**3. 下面Pod的演示效果：**
+
+```yaml
+```
+
+
+
+## 26.6 PodAntiAffinity Pod反亲和力
+
+> [!Attention]
+>
+> 1. 根据已经存在的 Pod 标签，用于避免将新 Pod 调度到具有特定标签的、 已有Pod 所在的node节点上。（**根据现有pod排除node，不同节点**）
+> 2. Pod反亲和力依赖于**Pod的拓扑ttopology分布约束**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
+
+
+
+# 27. Pod拓扑分布约束
+
+**拓扑分布约束（Topology Spread Constraints）** 来控制 [Pod](https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/) 在集群内故障域之间的分布， 例如区域（Region）、可用区（Zone）、节点和其他用户自定义拓扑域。 这样做有助于实现高可用并提升资源利用率。
+
+## 27.0 api文档
+
++ 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/topology-spread-constraints/#cluster-level-default-constraints
++ api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/workload-resources/pod-v1/#%E8%B0%83%E5%BA%A6
+
+## 27.1 动机
+
+假设你有一个最多包含二十个节点的集群，你想要运行一个自动扩缩的 [工作负载](https://kubernetes.io/zh-cn/docs/concepts/workloads/)，请问要使用多少个副本？ 答案可能是最少 2 个 Pod，最多 15 个 Pod。 当只有 2 个 Pod 时，你倾向于这 2 个 Pod 不要同时在同一个节点上运行： 你所遭遇的风险是如果放在同一个节点上且单节点出现故障，可能会让你的工作负载下线。
+
+除了这个基本的用法之外，还有一些高级的使用案例，能够让你的工作负载受益于高可用性并提高集群利用率。
+
+随着你的工作负载扩容，运行的 Pod 变多，将需要考虑另一个重要问题。 假设你有 3 个节点，每个节点运行 5 个 Pod。这些节点有足够的容量能够运行许多副本； 但与这个工作负载互动的客户端分散在三个不同的数据中心（或基础设施可用区）。 现在你可能不太关注单节点故障问题，但你会注意到延迟高于自己的预期， 在不同的可用区之间发送网络流量会产生一些网络成本。
+
+你决定在正常运营时倾向于将类似数量的副本[调度](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/) 到每个基础设施可用区，且你想要该集群在遇到问题时能够自愈。
+
+Pod 拓扑分布约束使你能够以声明的方式进行配置。
+
+## 27.2 pod之topologySpreadConstraints配置
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example-pod
+spec:
+  # 配置一个拓扑分布约束
+  topologySpreadConstraints: 
+    - maxSkew: <integer>
+      minDomains: <integer> # 可选
+      topologyKey: <string>
+      whenUnsatisfiable: <string>
+      labelSelector: <object>
+      matchLabelKeys: <list> # 可选；自从 v1.27 开始成为 Beta
+      nodeAffinityPolicy: [Honor|Ignore] # 可选；自从 v1.26 开始成为 Beta
+      nodeTaintsPolicy: [Honor|Ignore] # 可选；自从 v1.26 开始成为 Beta
+  ### 其他 Pod 字段置于此处
+```
+
++ `maxSkew` **描述这些Pod可能被不均匀分布的程度（必须大于0）**。计算方法：*两个zone或region区域pod数量的差值*。
+
+  该值随着`whenUnsatisfiabel`的值而变化：
+
+  + 当`whenUnsatisfiable=DoNotSchedule`时，则maxSkew定义目标拓扑中匹配Pod的数量与**全局最小值**之间的最大允许差值。 
+  + 当`whenUnsatisfiable=ScheduleAnyway`时，则该调度器会更为偏向能够降低偏差值的拓扑域。（即追求平衡）
+
++ `miniDomains` **表示符合条件的域的最小数量**，可选。
+
+  目的是确保在特定数量的拓扑域中分布 Pod，以便在这些域之间实现冗余和高可用性。
+
+  假设有一个包含 3 个可用区（zone1、zone2、zone3）的集群，`minDomains=2` 意味着调度器至少要在 2 个不同的可用区中分布 Pod。如果某个区域内已经放置了足够多的 Pod，调度器会尝试将新 Pod 调度到另一个可用区。
+
++ `topologyKey` **是node节点label标签的键（如果为zone表示按照zone来计算，如果是region表示按照region来计算）** 
+
+  **如果node节点使用此键标记并且具有相同的标签值，则认为这些节点视为处于同一拓扑域中。**我们将拓扑域中（键值对）的每个实例成为一个域。调度器将尝试在每个拓扑域中放置数量均衡的Pod。另外，我们将符合条件的域定义为其节点满足nodeAffinityPolicy和nodeTaintsPolicy要求的域。
+
++ `whenUnsatisfiable` **指示如果Pod不满足分布约束时如何处理**
+
+  可选项
+
+  + `DoNotSchedule`（**默认**）告诉调度器不要调度
+  + `ScheduleAnyway` 告诉调度器仍然继续调度，只是根据如何能将偏差最小化来对节点进行排序。
+
++ `labelSelector` **用于查找匹配的Pod，统计对应拓扑域中Pod的数量**
+
++ `matchLabelKeys` **Pod标签label键的列表，用于选择需要计算分布方式的Pod集合**
+
+  > `matchLabelKeys` 和 `labelSelector` 中禁止存在相同的键。未设置 `labelSelector` 时无法设置 `matchLabelKeys`。
+
++ `nodeAffinityPolicy` **表示我们在计算Pod拓扑分布偏差时将如何处理Pod的nodeAffinity或nodeSelector**
+
+  可选项：
+
+  + `Honor` 只有与nodeAffinity或nodeSelector匹配的节点才会包括到计算中
+  + `Ignore` nodeAffinity或nodeSelector被忽略，即所有节点均包括到计算中。
+
++ `nodeTaintsPolicy` **表示我们在计算Pod拓扑分布偏差时将如何处理节点污点**
+
+  可选项：
+
+  + `Honor` 包括不带污点的节点以及污点被新Pod所容忍的节点
+  + `Ignore` 节点污点被忽略，即包括所有节点。
+
+> 如果 Pod 定义了 `spec.nodeSelector` 或 `spec.affinity.nodeAffinity`， 调度器将在偏差计算中跳过不匹配的节点。
+
+## 27.3 节点标签
+
+**拓扑分布约束依赖于节点标签来标识每个[节点](https://kubernetes.io/zh-cn/docs/concepts/architecture/nodes/)所在的拓扑域。**（意思需要给每个node节点添加域标签）
+
+如：`topology.kubernetes.io/zone`，`topology.kubernetes.io/region`
+
+```bash
+# 1.给node节点添加域标签,用于区分可用区
+$ kubectl label node k8s-node1 k8s-node2 topology.kubernetes.io/zone=V
+$ kubectl label node k8s-master topology.kubernetes.io/zone=R
+```
+
+那么，从逻辑上看集群如下：
+
+![image-20241021203633225](./_media/image-20241021203633225.png)
+
+## 27.4 一致性
+
+你应该为一个组中的所有 Pod 设置相同的 Pod 拓扑分布约束。
+
+通常，如果你正使用一个工作负载控制器，例如 Deployment，则 Pod 模板会帮你解决这个问题。 如果你混合不同的分布约束，则 Kubernetes 会遵循该字段的 API 定义； 但是，该行为可能更令人困惑，并且故障排除也没那么简单。
+
+你需要一种机制来确保拓扑域（例如云提供商区域）中的**所有节点具有一致的标签**。 为了避免你需要手动为节点打标签，大多数集群会自动填充知名的标签， 例如 `kubernetes.io/hostname`。检查你的集群是否支持此功能
+
+
+
+## 27.5 拓扑分布约束示例
+
+### 27.5.1 一个拓扑分布约束
+
+假设你拥有一个 4 节点集群，其中标记为 `foo: bar` 的 3 个 Pod 分别位于 node1、node2 和 node3 中：
+
+![image-20241021204209894](./_media/image-20241021204209894.png)
+
+如果你希望新来的 Pod 均匀分布在现有的可用区域，则可以按如下设置其清单：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "one-topology-pod"
+  namespace: default
+  labels:
+    app: "one-topology-pod"
+    foo: bar # 新pod不添加，可以成功放入，但是计算的偏差不会发生变化（该pod被忽略了）
+spec:
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone #按照zone来计算
+    whenUnsatisfiable: DoNotSchedule # 如果不满足分布约束就不要调度该pod
+    labelSelector: # 用于选择哪些pod用于计算分布平衡
+      matchExpressions:
+        - key: foo
+          operator: in
+          values: ["bar"]
+  containers:
+  - name: debian
+    image: "debian-slim:latest"
+```
+
+从此清单看，`topologyKey: zone` 意味着均匀分布将只应用于存在标签键值对为 `zone: <any value>` 的节点 （没有 `zone` 标签的节点将被跳过）。如果调度器找不到一种方式来满足此约束， 则 `whenUnsatisfiable: DoNotSchedule` 字段告诉该调度器将新来的 Pod 保持在 pending 状态。
+
+如果该调度器将这个新来的 Pod 放到可用区 `A`，则 Pod 的分布将成为 `[3, 1]`。 这意味着实际偏差是 2（计算公式为 `3 - 1`），这违反了 `maxSkew: 1` 的约定。 为了满足这个示例的约束和上下文，新来的 Pod 只能放到可用区 `B` 中的一个节点上：
+
+![image-20241021205417088](./_media/image-20241021205417088.png)
+
+你可以调整 Pod 规约以满足各种要求：
+
+- 将 `maxSkew` 更改为更大的值，例如 `2`，这样新来的 Pod 也可以放在可用区 `A` 中。
+- 将 `topologyKey` 更改为 `node`，以便将 Pod 均匀分布在节点上而不是可用区中。 在上面的例子中，如果 `maxSkew` 保持为 `1`，则新来的 Pod 只能放到 `node4` 节点上。
+- 将 `whenUnsatisfiable: DoNotSchedule` 更改为 `whenUnsatisfiable: ScheduleAnyway`， 以确保新来的 Pod 始终可以被调度（假设满足其他的调度 API）。但是，最好将其放置在匹配 Pod 数量较少的拓扑域中。 请注意，这一优先判定会与其他内部调度优先级（如资源使用率等）排序准则一起进行标准化。
+
+### 27.5.2 多个拓扑分布约束
+
+下面的例子建立在前面例子的基础上。假设你拥有一个 4 节点集群， 其中 3 个标记为 `foo: bar` 的 Pod 分别位于 node1、node2 和 node3 上：
+
+![image-20241021205625777](./_media/image-20241021205625777.png)
+
+可以组合使用 2 个拓扑分布约束来控制 Pod 在节点和可用区两个维度上的分布：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "muti-topology-pod"
+  namespace: default
+  labels:
+    app: "muti-topology-pod"
+    foo: bar # 新pod不添加，可以成功放入，但是计算的偏差不会发生变化（该pod被忽略了）
+spec:
+  topologySpreadConstraints:
+  - maxSkew: 1 # 控制域
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        foo: bar
+  - maxSkew: 1 # 控制node节点
+    topologyKey: topology.kubernetes.io/host
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        foo: bar
+  containers:
+  - name: myapp
+    image: "debian-slim:latest"
+    resources: {}
+```
+
+在这种情况下，为了匹配第一个约束，新的 Pod 只能放置在可用区 `B` 中； 而在第二个约束中，新来的 Pod 只能调度到节点 `node4` 上。 该调度器仅考虑满足所有已定义约束的选项，因此唯一可行的选择是放置在节点 `node4` 上。
+
+### 27.5.3 带节点亲和性的拓扑分布约束
+
+假设你有一个跨可用区 A 到 C 的 5 节点集群：
+
+![image-20241021211414398](./_media/image-20241021211414398.png)
+
+而且你知道可用区 `C` 必须被排除在外。在这种情况下，可以按如下方式编写清单， 以便将 Pod `mypod` 放置在可用区 `B` 上，而不是可用区 `C` 上。 同样，Kubernetes 也会一样处理 `spec.nodeSelector`。
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/pods/
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "nodeaffinity-topology-pod"
+  namespace: default
+  labels:
+    app: "nodeaffinity-topology-pod"
+    foo: bar # 新pod不添加，可以成功放入，但是计算的偏差不会发生变化（该pod被忽略了）
+spec:
+  topologySpreadConstraints:
+  - maxSkew: 1 # 控制域
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        foo: bar
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions: # 排除zoneC域
+            - key: topology.kubernetes.io/zone
+              operator: NotIn
+              values: ["zoneC"]
+  containers:
+  - name: myapp
+    image: "debian-slim:latest"
+    resources: {}
+```
+
+## 27.6 偏差计算注意事项
+
+- 只有与新来的 Pod 具有**相同命名空间**的 Pod 才能作为匹配候选者。
+- 调度器只会考虑同时具有全部 `topologySpreadConstraints[*].topologyKey` 的节点（**节点要有全部的约束topologykey**）。 缺少任一 `topologyKey` 的节点将被忽略。这意味着：
+  1. 位于这些节点上的 Pod 不影响 `maxSkew` 计算，在上面的[例子](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/topology-spread-constraints/#example-conflicting-topologyspreadconstraints)中， 假设节点 `node1` 没有标签 "zone"，则 2 个 Pod 将被忽略，因此新来的 Pod 将被调度到可用区 `A` 中。
+  2. 新的 Pod 没有机会被调度到这类节点上。在上面的例子中， 假设节点 `node5` 带有**拼写错误的**标签 `zone-typo: zoneC`（且没有设置 `zone` 标签）。 节点 `node5` 接入集群之后，该节点将被忽略且针对该工作负载的 Pod 不会被调度到那里。
+
+- 注意，如果新 Pod 的 `topologySpreadConstraints[*].labelSelector` 与自身的标签不匹配，将会发生什么。 在上面的例子中，**如果移除新 Pod 的标签foo=bar**，则 Pod 仍然可以放置到可用区 `B` 中的节点上，因为这些约束仍然满足。 **然而，在放置之后，集群的不平衡程度保持不变。**可用区 `A` 仍然有 2 个 Pod 带有标签 `foo: bar`， 而可用区 `B` 有 1 个 Pod 带有标签 `foo: bar`。如果这不是你所期望的， 更新工作负载的 `topologySpreadConstraints[*].labelSelector` 以匹配 Pod 模板中的标签。
+
 # k8s调试模式
 
 + --v=6
