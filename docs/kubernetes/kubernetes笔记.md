@@ -7529,7 +7529,7 @@ $ kubectl taint node k8s-node2 memory=low:NoSchedule- # 删除label标签也是�
 > [!Tip]
 >
 > 1. **NodeAffinity节点亲和力基于label标签（node节点）**
-> 2. **PodAffinity和PodAntiAffinity基于Pod拓扑分布约束和label标签（node节点）**
+> 2. **PodAffinity和PodAntiAffinity基于Pod拓扑分布约束(很轻微，其实就是node标签)和pod节点的abel标签（筛选pod）**
 
 亲和力指节点亲和力，**它是Pod的一种属性（在Pod配置文件中配置）**使得Pod能够被吸引到具有一类特点的节点上。这可能处于一种偏好，也可能是硬性要求。（与污点相反）
 
@@ -7661,8 +7661,8 @@ spec:
 
 > [!Attention]
 >
-> 1. 根据已经存在的 Pod 标签，将新 Pod 调度到具有特定标签的、已有 Pod 所在的node节点上。（**根据现有pod选择node，同一节点**）
-> 2. Pod反亲和力依赖于**Pod的拓扑ttopology分布约束**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
+> 1. 根据已经存在的 Pod 标签，将新 Pod 调度到具有特定标签的、**已有 Pod 所在的node节点上或所属区域的node节点**。（**根据现有pod选择node，同一节点或同一区域**）
+> 2. Pod反亲和力依赖于**Pod的拓扑topology分布约束(很轻微，其实就是node标签)**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
 
 **1. 演示操作前，需要给node节点添加特殊标签即topology拓扑属性**
 
@@ -7676,15 +7676,14 @@ $ kubectl label no k8s-node1 k8s-node2 topology.kubernetes.io/zone=V # 表示nod
 # 3.查看现有pod的标签
 $ kubectl get pod -o wide --show-labels
 NAME                            READY   STATUS    RESTARTS       AGE     IP               NODE         NOMINATED NODE   READINESS GATES   LABELS
-centos                          1/1     Running   12 (44h ago)   11d     10.244.36.114    k8s-node1    <none>           <none>            run=centos
-nginx-deploy-8655f46645-dhnxh   1/1     Running   0              2m12s   10.244.36.124    k8s-node1    <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s1
-nginx-deploy-8655f46645-jpxcc   1/1     Running   0              2m12s   10.244.169.148   k8s-node2    <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s2
-nginx-deploy-8655f46645-rfgwk   1/1     Running   0              2m12s   10.244.235.208   k8s-master   <none>           <none>            app=nginx,pod-template-hash=8655f46645,security=s3
+NAME                                  READY   STATUS    RESTARTS   AGE   IP               NODE        NOMINATED NODE   READINESS GATES   LABELS
+s1-topology-deploy-599bcfb5c8-2fg5p   1/1     Running   0          76s   10.244.36.108    k8s-node1   <none>           <none>            app=nginx,pod-template-hash=599bcfb5c8,security=s1
+s2-topology-deploy-56fc59585c-qkn8j   1/1     Running   0          72s   10.244.169.169   k8s-node2   <none>           <none>            app=nginx,pod-template-hash=56fc59585c,security=s2
 ```
 
 **2. 创建定义了拓扑分布约束的deploy-1（给下面PodAffinity演示使用）**
 
-deployment-1
+deployment-1 配置文件如下:(**可以不配置topology,只要有指定node标签即可**)
 
 ```yaml
 # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
@@ -7705,14 +7704,14 @@ spec:
       labels:
         app: nginx
         security: s1
-    spec:
-      topologySpreadConstraints: #必须定义topologykey
-      - maxSkew: 1
-        topologyKey: topology.kubernetes.io/zone #以zone为划分（node必须具有该标签）
-        whenUnsatisfiable: DoNotSchedule
-        labelSelector:
-          matchLabels:
-            app: nginx
+    spec: #topology拓扑分布约束
+      # topologySpreadConstraints:
+      # - maxSkew: 1
+      #   topologyKey: topology.kubernetes.io/zone
+      #   whenUnsatisfiable: DoNotSchedule
+      #   labelSelector:
+      #     matchLabels:
+      #       app: nginx
       containers:
       - name: nginx
         image: 192.168.31.79:5000/nginx:latest
@@ -7721,7 +7720,7 @@ spec:
       restartPolicy: Always
 ```
 
-deployment-2
+deployment-2 配置文件如下:(**可以不配置topology,只要有指定node标签即可**)
 
 ```yaml
 # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
@@ -7742,14 +7741,14 @@ spec:
       labels:
         app: nginx
         security: s2
-    spec:
-      topologySpreadConstraints: #必须定义topologykey
-      - maxSkew: 1
-        topologyKey: topology.kubernetes.io/zone #以zone为划分（node必须具有该标签）
-        whenUnsatisfiable: DoNotSchedule
-        labelSelector:
-          matchLabels:
-            app: nginx
+    spec: #topology拓扑分布约束
+      # topologySpreadConstraints:
+      # - maxSkew: 1
+      #   topologyKey: topology.kubernetes.io/zone
+      #   whenUnsatisfiable: DoNotSchedule
+      #   labelSelector:
+      #     matchLabels:
+      #       app: nginx
       containers:
       - name: nginx
         image: 192.168.31.79:5000/nginx:latest
@@ -7758,19 +7757,245 @@ spec:
       restartPolicy: Always
 ```
 
-**3. 下面Pod的演示效果：**
+**3. 定义deploy演示效果：**
 
-```yaml
-```
+1. ***新Pod和匹配的已有Pod在同一node节点上运行*** （单节点概念）
 
+   由于PodAffinity的`topologyKey=kubernetes.io/hostname`(node标签)，每个节点都有唯一的`kubernetes.io/hostname`值，所以根据此将新pod放在已运行节点上（通过pod标签`app=nginx`和`security=s1`定位）
 
+   **效果：三个Pod全运行在node1节点上(多次删除依旧是这样)**
+
+   1. 根据`app=nginx,security=s1`且命名空间为default找到pod `s1-topology-deploy`及其所在节点node1
+   2. 根据reqired配置的`topologyKey=kubernetes.io/hostname`，查看node1节点 标签`kubernetes.io/hostname`发现其值为`k8s-node1`
+   3. 找出集群内所有具有`kubernetes.io/hostname=k8s-node1`标签的节点为只有node1
+   4. 没配置preferred偏好，跳过
+   5. 尝试将所有副本数pod放在node1节点上,且放置成功(当然也有可能放置不成功，而换到其他节点上：如有污点，偏好机器上cpu和内存等压力高)
+   6. 多次删除这些pod发现还是会部署在node1节点上
+
+   ![image-20241022154819300](./_media/image-20241022154819300.png)
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: podaffinity-deploy-hostname
+     namespace: default
+     labels:
+       app: podaffinity-deploy-hostname
+   spec:
+     selector:
+       matchLabels:
+         app: nginx
+         affinity: podAffinity
+     replicas: 3
+     template:
+       metadata:
+         labels:
+           app: nginx
+           affinity: podAffinity
+       spec:
+         affinity:
+           podAffinity: #定义节点亲和力
+             requiredDuringSchedulingIgnoredDuringExecution: # 必须要满足的条件
+             - topologyKey: "kubernetes.io/hostname" #表示同一节点(必填,为node标签)
+               namespaces: [default]
+               labelSelector: # 定位已存在的pod
+                 matchLabels:
+                   app: nginx
+                   security: s1
+            # 都具体某个节点了就没必要再定义preferredDuringSchedulingIgnoredDuringExecution
+         containers:
+         - name: nginx
+           image: 192.168.31.79:5000/nginx:latest
+           resources: {}
+         restartPolicy: Always
+   ```
+
+   
+
+   
+
+2. ***新Pod和匹配的已有Pod在同一标签区域内的节点上运行*** （一个区域内所有节点概念）
+
+   例如node标签`kubernetes.io/os=linux`表示**所有有该标签的node都会被调度到（不单单是匹配到的pod所在的节点）**
+
+   **效果：**
+
+   1. 根据`app=nginx,security=s1`且命名空间为default找到pod `s1-topology-deploy`及其所在节点node1
+
+   2. 根据reqired配置的`topologyKey=kubernetes.io/os`，查看node1节点 标签`kubernetes.io/os`发现其值为`linux`
+
+   3. 找出集群内所有具有`kubernetes.io/os=linux`标签的节点为：master，node1，node2
+
+   4. 根据preferred配置权重匹配排序，优先匹配
+
+      + 权重50，优先放在指定pod所在的node节点（pod所在命名空间为kube-system，具有标签`component=kube-apiserver`），找到为master节点
+      + 权重50，次优先放在指定pod所在的node节点（pod所在命名空间为default，具有标签`security=s2`），找到为node2节点
+
+   5. 由于副本数有两个，尝试将pod一个放在master节点，一个放在node2节点上
+
+   6. 放置成功 (当然也有可能放置不成功，而换到其他节点上：如有污点，偏好机器上cpu和内存等压力高)
+
+   7. 多次删除这两个pod，发现总是部署在master和node2上
+
+      ![image-20241022162720598](./_media/image-20241022162720598.png)
+
+   ```yaml
+   # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: podaffinity-deploy-linux
+     namespace: default
+     labels:
+       app: podaffinity-deploy-linux
+   spec:
+     selector:
+       matchLabels:
+         app: nginx
+         affinity: podAffinity
+     replicas: 2
+     template:
+       metadata:
+         labels:
+           app: nginx
+           affinity: podAffinity
+       spec:
+         affinity:
+           podAffinity: #定义节点亲和力
+             requiredDuringSchedulingIgnoredDuringExecution: # 必须要满足的条件
+             - topologyKey: "kubernetes.io/os" #表示同一域(必填,为node标签)
+               #namespaces: [default]
+               namespaceSelector: # 定位namespace的另一个方法，通过ns的label标签
+                 matchExpressions: 
+                   - key: kubernetes.io/metadata.name
+                     operator: In
+                     values: ["default"]
+               labelSelector: # 定位已存在的pod
+                 matchExpressions:
+                 - key: app
+                   operator: In
+                   values:
+                   - nginx
+                 - key: security # 定位到pod s1-topology-deploy所在的域下所有节点
+                   operator: In
+                   values:
+                   - s1
+             preferredDuringSchedulingIgnoredDuringExecution: # 优先满足的条件（满足最好不满足也行）
+             - podAffinityTerm: #权重50 优先匹配这个node
+                 topologyKey: "kubernetes.io/hostname"
+                 labelSelector: 
+                   matchExpressions:
+                   - key: component
+                     operator: In
+                     values: ["kube-apiserver"] # 具有security=s1或security=s2标签的pod所在的node
+                 namespaces: ["kube-system"]
+               weight: 50
+             - podAffinityTerm: #权重50 优先匹配这个node
+                 topologyKey: "kubernetes.io/hostname"
+                 labelSelector: 
+                   matchExpressions:
+                   - key: security
+                     operator: In
+                     values: ["s2"] # 具有security=s2标签的pod所在的node
+                 namespaces: ["default"]
+               weight: 50
+         containers:
+         - name: nginx
+           image: 192.168.31.79:5000/nginx:latest
+           resources: {}
+         restartPolicy: Always
+   ```
+
+> [!Attention|style:flat] 
+>
+> ***超级重要：***
+>
+> 具体是将新Pod放在和现有Pod(基于pod标签匹配的)所在同一节点还是同一区域依赖于`topologyKey`的值：
+>
+> + 如果PodAffinity中的`topologyKey=kubernetes.io/hostname`那么就是**匹配到同一节点**
+>
+> + 如果PodAffinity中的`topologyKey=kubernetes.io/zone`那么就是**匹配到同一可用区节点**
+>
+>   也就是说，新Pod会放在已有pod所在zone中**所有node的节点的任意一个（具体哪个看调度），而不是和他同一个节点**
+>
+> + 如果PodAffinity中的`kubernetes.io/os=linux`那么就是**匹配到同一操作系统内节点**
+>
+>   也就是说，新Pod会放在已有pod所在linux中**所有node的节点的任意一个（具体哪个看调度），而不是和他同一个节点**
+>
+> **总结：由上面我们可以看出**
+>
+> 1. **topologyKey的值就是node节点标签的键，任意写（也可以自定义）**
+> 2. **具体新pod运行在哪个节点上取决于一个标签中node的数量（如kubernetes.io/os，只要都是linux都会被调度到）**
 
 ## 26.6 PodAntiAffinity Pod反亲和力
 
 > [!Attention]
 >
 > 1. 根据已经存在的 Pod 标签，用于避免将新 Pod 调度到具有特定标签的、 已有Pod 所在的node节点上。（**根据现有pod排除node，不同节点**）
-> 2. Pod反亲和力依赖于**Pod的拓扑ttopology分布约束**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
+> 2. Pod反亲和力依赖于**Pod的拓扑ttopology分布约束(很轻微，其实就是node标签)**。参见[27. Pod拓扑分布约束](#27. Pod拓扑约束)
+
+**效果：**
+
+1. 根据`app=nginx`且命名空间为default找到pod `s1-topology-deploy`和`s2-topology-deploy`及其所在节点node1,node2
+2. 根据reqired配置的`topologyKey`的值，即节点node1,node2标签`topology.kubernetes.io/zone`获取到他们的值都为`V`
+3. 由于此策略是反着来的，所以需要将**集群中所有标签**`topology.kubernetes.io/zone=V`**的节点排除掉**（即排除node1,node2）,那么此时集群中只有一个node了master
+4. 根据preferred配置的规则**尝试排除**匹配的节点
+   + `component=kube-apiserver`且命名空间为kube-system,找到内置组件`kube-apiserver-k8s-master`，及其所在节点master
+   + 根据preferred中配置的`topology=topology.kubernetes.io/hostname`,查询master节点对应的标签值`topology.kubernetes.io/hostname=k8s-master`
+   + 尝试尽可能的排除集群内所有具有该标签`topology.kubernetes.io/hostname=k8s-master`的节点（只有一个master）
+   + 尝试排除master节点失败，**因为根据required中配置，反向匹配只有一个匹配的节点master，这是必须满足的**，而此处尝试排除master自然失败
+5. 所有pod副本全部部署在master节点上
+6. 多次删除pod副本，发现最后运行的节点还是master
+
+![image-20241022173639705](./_media/image-20241022173639705.png)
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podantiaffinity-deploy
+  namespace: default
+  labels:
+    app: podantiaffinity-deploy
+spec:
+  selector:
+    matchLabels:
+      app: podantiaffinity-deploy
+      # app: nginx # 不能再加 app: nginx因为这个是基于排除法(否则所有node上都至少有一个pod其标签app=nginx了,就找不到适合的节点了)
+      affinity: podAntiAffinity
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: podantiaffinity-deploy
+        # app: nginx  # 不能再加 app: nginx因为这个是基于排除法(否则所有node上都至少有一个pod其标签app=nginx了,就找不到适合的节点了)
+        affinity: podAntiAffinity
+    spec:
+      affinity:
+        podAntiAffinity: # 排除满足pod的node所在区域内的所有node
+          requiredDuringSchedulingIgnoredDuringExecution: # 必须满足的排除条件
+          - topologyKey: topology.kubernetes.io/zone
+            labelSelector:
+              matchLabels:
+                app: nginx
+            namespaces: [default]
+          preferredDuringSchedulingIgnoredDuringExecution: # 最好满足的排除条件，可以不满足
+          - podAffinityTerm: # 权重10，最好能排除的node，但不强制
+              topologyKey: topology.kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  component: "kube-apiserver" # 根据pod标签查找匹配pod，进而排除所在的节点或区域
+              namespaces: ["kube-system"]
+            weight: 100
+      containers:
+      - name: nginx
+        image: 192.168.31.79:5000/nginx:latest
+        resources: {}
+      restartPolicy: Always
+```
 
 
 
