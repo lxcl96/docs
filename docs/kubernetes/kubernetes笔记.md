@@ -8248,7 +8248,671 @@ spec:
 
 - 注意，如果新 Pod 的 `topologySpreadConstraints[*].labelSelector` 与自身的标签不匹配，将会发生什么。 在上面的例子中，**如果移除新 Pod 的标签foo=bar**，则 Pod 仍然可以放置到可用区 `B` 中的节点上，因为这些约束仍然满足。 **然而，在放置之后，集群的不平衡程度保持不变。**可用区 `A` 仍然有 2 个 Pod 带有标签 `foo: bar`， 而可用区 `B` 有 1 个 Pod 带有标签 `foo: bar`。如果这不是你所期望的， 更新工作负载的 `topologySpreadConstraints[*].labelSelector` 以匹配 Pod 模板中的标签。
 
+
+
+
+
+# 28. 安全（认证，鉴权，准入控制）
+
+kubernetes作为一个分布式集群的管理工具,保证集群的安全性是其一个重要的任务。API Server是集群内部各个组件通信的中介，也是外部控制的入口。所以kubernetes的安全机制基本就是围绕保护API Server来设计的。**Kubernetes使用了认证（Authentication）、鉴权（Authorization）、准入控制（Admission Control）三步来保证API Server的安全**。
+
+![image-20241023093843425](./_media/image-20241023093843425.png)
+
+## 28.0 集群中的用户
+
+**所有 Kubernetes 集群都有两类用户：由 Kubernetes 管理的服务账号(serviceaccount)和普通用户**。其中serviceaccount属于集群的资源关联到pod，可以在k8s集群内创建；而普通用户无法在k8s集群内创建。Kubernetes 假定普通用户是由一个与集群无关的服务通过以下方式之一进行管理的：
+
+- 负责分发私钥的管理员
+- 类似 Keystone 或者 Google Accounts 这类用户数据库
+- 包含用户名和密码列表的文件
+
+有鉴于此，**Kubernetes 并不包含用来代表普通用户账号的对象**。 普通用户的信息无法通过 API 调用添加到集群中。
+
+尽管无法通过 API 调用来添加普通用户， **Kubernetes 仍然认为能够提供由集群的证书机构签名的合法证书的用户是通过身份认证的用户**。 基于这样的配置，Kubernetes 使用**证书中的 'subject' 的通用名称（Common Name）字段 （例如，"/CN=bob"）来确定用户名**。 接下来，基于角色访问控制（RBAC）子系统会确定用户是否有权针对某资源执行特定的操作。
+
+与此不同，服务账号（`serviceaccount`）是 Kubernetes API 所管理的用户。它们被绑定到特定的名字空间， 或者由 API 服务器自动创建，或者通过 API 调用创建。服务账号与一组以 Secret 保存的凭据相关，这些凭据会被挂载到 Pod 中，从而允许集群内的进程访问 Kubernetes API。
+
+> **总结：**
+>
+> 1. `serviceaccount`：是集群的资源，可以通过api创建。主要用于pod内容器访问apiserver
+> 2. 普通用户：不是集群的资源，由外部定义（你随便都行）,只要在https证书中指定CN等信息即可
+
+## 28.1 Authentication 认证
+
+参考文档： https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authentication/#authentication-strategies
+
+![image-20241023114552308](./_media/image-20241023114552308.png)
+
+### 28.1.1 用户认证方式
+
+一般有以下几种方式进行认证：
+
+1. **HTTP Token认证**
+
+   比如Bearer Token
+
+2. **HTTP Base认证**
+
+   将用户名和密码用base64算法进行编码后的字符串放在**HTTP Request中的Header Authorization域**里发生给服务端，服务端收到后进行编码，获取用户名及密码。
+
+3. **X509客户证书（即HTTPS证书）认证**（*主流方案*）
+
+   **基于K8s集群内CA根证书签名的客户端身份认证方式**
+
+   ![image-20241023104254094](./_media/image-20241023104254094.png)
+
+4. 启动引导令牌认证
+
+5. 服务账号令牌认证
+
+6. OIDC令牌认证
+
+7. Webhook令牌认证
+
+8. 身份代理认证
+
+### 28.1.2 HTTPS双向认证流程
+
+Kubernetes CA认证也叫HTTPS证书认证，执行ApiServer CA认证过滤器链逻辑的前提是客户端和服务端完成HTTPS双向认证，下面着重说下HTTPS双向认证流程：
+
+1.客户端发起建⽴HTTPS连接请求，将SSL协议版本的信息发送给服务端； 
+2.服务器端将本机的公钥证书（server.crt）发送给客户端； 
+
+3. 客户端通过自己的根证书（ca.crt）验证服务端的公钥证书（server.crt）的合法性(包括检查数字签名，验证证书链，检查证书的有效期 ，检查证书的撤回状态)，取出服务端公钥。
+4. 客户端将客户端公钥证书（client.crt）发送给服务器端； 
+5. 服务器端使⽤根证书（ca.crt）解密客户端公钥证书，拿到客户端公钥； 
+6. 客户端发送⾃⼰⽀持的加密⽅案给服务器端； 
+7. 服务器端根据⾃⼰和客户端的能⼒，选择⼀个双⽅都能接受的加密⽅案，使⽤客户端的公钥加密后发送给客户端； 
+8. 客户端使⽤⾃⼰的私钥解密加密⽅案，⽣成⼀个随机数R，使⽤服务器公钥加密后传给服务器端； 
+9. 服务端⽤⾃⼰的私钥去解密这个密⽂，得到了密钥R；
+10. 服务端和客户端在后续通讯过程中就使⽤这个密钥R进⾏通信了。
+
+![624219-20230410082256979-1578752507](./_media/624219-20230410082256979-1578752507.png)
+
+
+
+### 28.1.3 k8s中需要认证的节点
+
+**两种类型：**
+
++ kubernetes内组件对apiserver的访问：**kubelet,kubectl,kube-controller-manager,kube-scheduler,kube-proxy** （以https证书）
++ kubernetes管理的Pod中容器对apiserver的访问：**Pod**，dashboard也是以pod的形式运行（以serviceaccount）
+
+**安全性说明**
+
++ **kube-controller-manager,kube-scheduler**与apiserver在同一台机器上，所以可以直接使用apiserver的非安全认证端口访问`--insecure-bind-address=127.0.0.1`
++ **kubelet,kubectl,kube-proxy**访问apiserver需要证书进行HTTPS的双向认证
+
+![image-20241023104615637](./_media/image-20241023104615637.png)
+
+### 28.1.4 证书颁发
+
+k8s中证书颁发有下面两种情况
+
++ **手动签发**：通过k8s集群的根CA服务进行签发HTTPS证书
++ **自动签发**：kubelet首次访问apiserver时使用token做认证，通过后kube-controller-manager会为当前机器的kubelet生成一个证书，以后访问都是用证书进行了（**比如master节点使用kubeadm安装就是这个流程**）
+
+### 28.1.5 kubeconfig
+
+> 针对客户端使用不同kubeconfig文件连接到不同的k8s服务端
+
+**kubeconfig文件包含集群参数（CA证书、apiserver地址），客户端参数（上面生成的证书和私钥），集群context信息（集群名称、用户名）。**
+
+kubernetes组件（kubelet,kubectl,kube-scheduler等）通过启动时指定不同的kubeconfig文件可以切换到不同的集群。
+
+kubeconfig举例： 
+
+1. master集群上的`/etc/kubernetes/admin.conf`就是部署k8s时用户`~/.kube/config`文件，里面时admin用户，给本地**kubectl使用**。
+2. master集群上的`/etc/kubernetes/controller-manager.conf`给内置用户使用`system:kube-controller-manager`。
+3. master集群或客户端机器上的`/etc/kubernetes/kubelet.conf`，给机器上**kubelet使用**
+
+### 28.1.6 ServiceAccount
+
+参考文档：https://kubernetes.io/zh-cn/docs/concepts/security/service-accounts/
+
+> [!Note]
+>
+> **ServiceAccount是为Pod内容器访问apiserver而创建的。**
+
+因为Pod的创建、销毁是动态的，所以要为他手动生成证书就不可行（太消耗资源了）。kubernetes使用serviceaccount解决pod访问apiserver的认证问题。
+
+一般而言，你可以在以下场景中使用服务账号来提供身份标识：
+
+- 你的 Pod 需要与 Kubernetes API 服务器通信，例如在以下场景中：
+  - 提供对存储在 Secret 中的敏感信息的只读访问。
+  - 授予[跨名字空间访问](https://kubernetes.io/zh-cn/docs/concepts/security/service-accounts/#cross-namespace)的权限，例如允许 `example` 名字空间中的 Pod 读取、列举和监视 `kube-node-lease` 名字空间中的 Lease 对象。
+
+- 你的 Pod 需要与外部服务进行通信。例如，工作负载 Pod 需要一个身份来访问某商业化的云 API， 并且商业化 API 的提供商允许配置适当的信任关系。
+- [使用 `imagePullSecret` 完成在私有镜像仓库上的身份认证](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/configure-service-account/#add-imagepullsecrets-to-a-service-account)。
+
+- 外部服务需要与 Kubernetes API 服务器进行通信。例如，作为 CI/CD 流水线的一部分向集群作身份认证。
+- 你在集群中使用了第三方安全软件，该软件依赖不同 Pod 的 ServiceAccount 身份，按不同上下文对这些 Pod 分组。
+
+### 28.1.7 Secret和ServiceAccount关系
+
+kubernetes设计了一种资源叫做Secret分为两类：一种是用于ServiceAccount的service-account-token，另一种是用于保存用户自定义保密信息的Opaque。
+
+ServiceAccount中用到三个部分：
+
+1. **token**：是使用apiserver私钥签发的JWT，用于访问apiserver时服务端验证
+2. **ca.crt**：根证书，用于客户端验证apiserver发送过来的证书。
+3. **namespace**：标识这个service-account-token的作用域
+
+默认情况下，每个namespace都会有一个叫default的serviceaccount，如果pod在创建时没有指定serviceaccount，那么就会使用pod所属的namespace的serviceaccount即名字叫default的serviceaccount。
+
+pod容器中serviceaccount默认挂载目录：`/run/secrets/kubernetes.io/servicesccount`.里面就有上面的三个部分:**token,ca.crt,namespace**
+
+## 28.2 Authorization 鉴权
+
+参考文档：https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/
+
+上面认证过程，只是确认通信的双方都确认了对方是可信的，可以相互通信。而**鉴权是确定请求方有哪些资源的权限。**
+
+Kubernetes 对 API 请求的鉴权在 API 服务器内进行。 API 服务器根据所有策略评估所有请求属性，可能还会咨询外部服务，然后允许或拒绝该请求。
+
+API 请求的所有部分都必须通过某种鉴权机制才能继续， 换句话说：默认情况下拒绝访问。
+
+当系统配置了多个[鉴权模块](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#authorization-modules)时，Kubernetes 将按顺序使用每个模块。 如果任何鉴权模块**批准**或**拒绝**请求，则立即返回该决定，并且不会与其他鉴权模块协商。 如果所有模块对请求**没有意见(没有允许)**，则拒绝该请求。 总体拒绝裁决意味着 API 服务器拒绝请求并以 HTTP 403（禁止）状态进行响应。
+
+> [!Note]
+>
+> 依赖于特定对象种类的特定字段的访问控制和策略由[准入控制器](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/admission-controllers/)处理。
+>
+> Kubernetes 准入控制发生在鉴权完成之后（因此，仅当鉴权决策是允许请求时）。即**默是拒绝所以你要配置允许，且权限是累加的（不能排除）**
+
+### 28.2.1 鉴权中使用的请求属性
+
+Kubernetes 仅审查以下 API 请求属性：
+
+- **用户(user)** —— 身份验证期间提供的 `user` 字符串。
+- **组(group)** —— 经过身份验证的用户所属的组名列表。
+- **额外信息(extra)** —— 由身份验证层提供的任意字符串键到字符串值的映射。
+- **API** —— 指示请求是否针对 API 资源。
+- **请求路径(Request ath)** —— 各种非资源端点的路径，如 `/api` 或 `/healthz`。
+- **API 请求动词(API request verb)** —— API 动词 `get`、`list`、`create`、`update`、`patch`、`watch`、 `proxy`、`redirect`、`delete` 和 `deletecollection` 用于资源请求。 要确定资源 API 端点的请求动词，请参阅[请求动词和鉴权](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#determine-the-request-verb)。
+- **HTTP 请求动词(HTTP request verb)** —— HTTP 动词 `get`、`post`、`put` 和 `delete` 用于非资源请求。
+- **资源(Resource)** —— 正在访问的资源的 ID 或名称（仅限资源请求）- 对于使用 `get`、`update`、`patch` 和 `delete` 动词的资源请求，你必须提供资源名称。
+- **子资源(Subresource)** —— 正在访问的子资源（仅限资源请求）。
+- **名字空间(namespace)** —— 正在访问的对象的名称空间（仅适用于名字空间资源请求）。
+- **API 组(API group)** —— 正在访问的 [API 组](https://kubernetes.io/zh-cn/docs/concepts/overview/kubernetes-api/#api-groups-and-versioning) （仅限资源请求）。空字符串表示[核心 API 组](https://kubernetes.io/zh-cn/docs/reference/using-api/#api-groups)。
+
+### 28.2.2 资源请求动词verb和鉴权
+
+***非资源请求：***
+
+对于 `/api/v1/...` 或 `/apis/<group>/<version>/...` 之外的端点的请求被视为**非资源请求（Non-Resource Requests）**， 并使用该请求的 HTTP 方法的小写形式作为其请求动词。
+
+例如，对 `/api` 或 `/healthz` 这类端点的 `GET` 请求将使用 **get** 作为其动词。
+
+***资源请求：***
+
+为了确定资源 API 端点的请求动词，Kubernetes 会映射所使用的 HTTP 动词， 并考虑该请求是否作用于单个资源或资源集合：
+
+| HTTP 动词     | 请求动词                                                     |
+| ------------- | ------------------------------------------------------------ |
+| `POST`        | **create**                                                   |
+| `GET`、`HEAD` | **get**（针对单个资源）、**list**（针对集合，包括完整的对象内容）、**watch**（用于查看单个资源或资源集合） |
+| `PUT`         | **update**                                                   |
+| `PATCH`       | **patch**                                                    |
+| `DELETE`      | **delete**（针对单个资源）、**deletecollection**（针对集合） |
+
+> ***注意：***
+>
+> **get**、**list** 和 **watch** 动作都可以返回一个资源的完整详细信息。就返回的数据而言，它们是等价的。 例如，对 **secrets** 使用 **list** 仍然会显示所有已返回资源的 **data** 属性。
+
+Kubernetes 有时使用专门的动词以对额外的权限进行鉴权。例如：
+
+- 身份认证的特殊情况
+  - 对核心 API 组中 `users`、`groups` 和 `serviceaccounts` 以及 `authentication.k8s.io` API 组中的 `userextras` 所使用的 **impersonate** 动词。
+- RBAC
+  - 对 `rbac.authorization.k8s.io` API 组中 `roles` 和 `clusterroles` 资源的 **bind** 和 **escalate** 动词
+
+### 28.2.4 鉴权方法
+
++ **AlwaysAllow**
+
+  此模式允许所有请求，但存在安全风险，仅当你的API请求不需要鉴权（如测试）时使用
+
++ **AlwaysDeny**
+
+  此模式拒绝所有请求，此鉴权模式仅适用于测试。
+
++ **ABAC（基于属性的访问控制）** **修改完无法立刻生效，需要重启发服务**
+
+  通过使用将属性组合在一起的策略向用户授予访问权限， 策略可以使用任何类型的属性（用户属性、资源属性、对象、环境属性等）。
+
++ **RBAC（基于角色的访问控制）**
+
+  在此上下文中，访问权限是单个用户执行特定任务（例如查看、创建或修改文件）的能力。 在这种模式下，Kubernetes 使用 `rbac.authorization.k8s.io` API 组来驱动鉴权决策， 允许你通过 Kubernetes API 动态配置权限策略。
+
++ **Node**
+
+  一种特殊用途的鉴权模式，根据 kubelet 计划运行的 Pod 向其授予权限。
+
++ **Webhook**
+
+  Kubernetes 的 [Webhook 鉴权模式](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/webhook/)用于鉴权，进行同步 HTTP 调用， 阻塞请求直到远程 HTTP 服务响应查询。你可以编写自己的软件来处理这种向外调用，也可以使用生态系统中的解决方案。
+
+#### 28.2.4.1 RBAC鉴权
+
+参考连接： https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/
+
+RBAC即Role-Based Access Control基于角色的访问控制。在kubernetes1.5中引入，现行版本成为默认标准。
+
+RBAC 鉴权机制使用 `rbac.authorization.k8s.io` [API 组](https://kubernetes.io/zh-cn/docs/concepts/overview/kubernetes-api/#api-groups-and-versioning)来驱动鉴权决定， 允许你通过 Kubernetes API 动态配置策略。
+
+相对于其他访问控制方式，拥有以下优势：
+
++ 对集群中的资源(pod,deploy等)和非资源(pod状态，元数据信息等)均拥有完整的覆盖
++ 整个RBAC完全由几个API对象（集群资源）完成，同其他API对象（集群资源）一样，可以用kubectl或API进行操作
++ 可以在运行时进行调整，无需重启apiserver
+
+##### 28.2.4.1.1 RBAC资源对象说明
+
+RBAC中引入4个新的顶级资源对象：**Role,ClusterRole,RoleBinding,ClusterRoleBinding**。4种对象类型均可以通过kubectl与api操作。
+
++ **Role** 一个Role只能获取一个命名空间下资源信息（**具体哪些通过配置**）
++ **ClusterRole** 一个可以获取当前集群种所有命名空间下资源信息（**具体哪些通过配置**）
++ **RoleBinding** 既可以和**Role**进行绑定，也可以和**ClusterRole**绑定(**后者是用于在多个（跨）命名空间中共享通用权限，避免重复定义相同的 Role**。)
++ **ClusterRoleBinding** 只能和**RoleBinding**绑定
+
+| 特性           | Role + RoleBinding                                | ClusterRole + ClusterRoleBinding                | ClusterRole + RoleBinding                      |
+| -------------- | ------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------- |
+| **作用范围**   | 仅限于特定命名空间                                | 作用于整个集群（所有命名空间）                  | 限制在特定命名空间                             |
+| 控制的资源类型 | 只能控制命名空间级别的资源                        | 可控制集群级别和命名空间级别的资源              | 可控制集群级别和命名空间级别的资源             |
+| 典型场景       | 在某个命名空间内对资源进行精细化权限控制          | 集群管理员，或者跨所有命名空间共享权限的角色    | **跨命名空间内配置通用的命名空间范围的权限**   |
+| 适用的资源例子 | `pods`、`services`、`configmaps` 等命名空间内资源 | `nodes`、`persistentvolumes`、`clusterroles` 等 | `pods`、`services`、`configmaps`等命名空间资源 |
+
+![image-20241023155537810](./_media/image-20241023155537810.png)
+
+##### 28.2.4.1.2 用户来源？
+
+kubernetes并不会提供用户管理，那么**User、Group、ServiceAccount**指定的用户又来自哪里呢？
+
+**如果是使用HTTPS证书认证，那么就是在申请证书时指定的CN和O（其实就是openssl证书申请的配置文件）**
+
+> apiserver会把客户端证书中`CN`当作用户名，`names.O`当作Group.
+
+下面以`cfssl`配置文件为例：
+
+```json
+{
+    "CN": "admin", //证书的通用名称（Common Name，CN
+    "host": [], //证书所适用的主机名或 IP 地址
+    "key": { //密钥生成的算法和密钥长度
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "c": "CN", //国家代码，CN 表示中国
+            "ST": "Hangzhou", //省/直辖市
+            "L": "XS", //城市或区域名称
+            "O": "system:masters", //组织名组织名称，通常指签发者或所有者所属的组织或公司称(system:表示为k8s内部组)
+            "OU": "System" //组织单位名称，表明组织内部的某个部门或单位
+        }
+    ]
+}
+```
+
+kubelet使用TLS Bootstraping认证时，apiserver可以使用Bootstrap Tokens或者Token authentication file验证 =token，无论哪一种，kubernetes都会为token绑定一个默认的User和Group。
+
+Pod使用ServiceAccount认证时，`service-account-token（就是secret）`中的JWT会保存User信息。**有了用户信息，再创建一对Role/RoleBinding(ClusterRole/ClusterRoleBinding)资源对象，就可以完成权限绑定了**。
+
+##### 28.2.4.1.3 Role和ClusterRole
+
+在RBAC API中，Role代表一组规则权限，**权限只会增加（累加权限）**，不存在一个资源一开始就有很多权限而通过RBAC对其进行减少的操作；**Role只能定义在一个namespace中，如果想要跨namespace则可以创建ClusterRole**
+
++ **Role只能用于管理单个namespace中资源**
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: pod-reader
+rules:
+- apiGroups: [""] # "" 标明 core API 组
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+```
+
+ClusterRole具有和Role相同的权限角色控制能力，不同的是**ClusterRole是集群级别的**。ClusterRole可以用于：
+
+1. **集群级别的资源控制（如node访问权限，PV，namespace，StorageClass等）**
+2. **非资源型endpoints（如/healthz）访问**
+3. **所有namesapce中资源控制（如pod，deployment等）**
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # "namespace" 被忽略，因为 ClusterRoles 不受名字空间限制
+  name: secret-reader
+rules:
+- apiGroups: [""]
+  # 在 HTTP 层面，用来访问 Secret 资源的名称为 "secrets"
+  resources: ["secrets"]
+  verbs: ["get", "watch", "list"]
+```
+
+##### 28.2.4.1.4 RoleBinding和ClusterRoleBinding
+
+**RoleBinding可以将角色中定义的权限授予用户或用户组或serviceaccount**，RoleBinding包含一组权限列表(subjects)，权限列表中包含有不同形式的待授予权限资源类型（**user,group,serviceAccount**）；RoleBinding同样包含对被Binding的Role的引用；**RoleBinding适用于某单个命名空间授权，而ClusterRoleBinding适用于集群范围内的授权**
+
+例如：下面将default命名空间下名为pod-reader的Role绑定到用户jane，此后jane就具有在default命名空间下对s所有pod的get,watch,list权限
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+# 此角色绑定允许 "jane" 读取 "default" 名字空间中的 Pod
+# 你需要在该名字空间中有一个名为 “pod-reader” 的 Role（见上面）
+kind: RoleBinding
+metadata:
+  name: read-pods
+  namespace: default
+subjects:
+# 你可以指定不止一个“subject（主体）”
+- kind: User
+  name: jane # "name" 是区分大小写的
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  # "roleRef" 指定与某 Role 或 ClusterRole 的绑定关系
+  kind: Role        # 此字段必须是 Role 或 ClusterRole
+  name: pod-reader  # 此字段必须与你要绑定的 Role 或 ClusterRole 的名称匹配
+  apiGroup: rbac.authorization.k8s.io # 角色所在的组
+```
+
+RoleBinding同样可以引用ClusterRole来对当前namespace内用户、用户组和ServiceAccount进行授权，这种操作**允许集群管理员在整个集群内定义一些通用的ClusterRole，然后在不同的namespace中使用RoleBinding来引用**。以此来**实现跨命名空间的相同权限配置，不用抽重复定义Role了**。
+
+例如：以下RoleBinding引用了一个ClusterRole，这个ClusterRole具有整个集群内对secrets的访问权限；但是其授权用户`dave`只能访问development命名空间内的secrets。（因为RoleBinding定义在development命名空间内）
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+# 此角色绑定使得用户 "dave" 能够读取 "development" 名字空间中的 Secret
+# 你需要一个名为 "secret-reader" 的 ClusterRole
+kind: RoleBinding
+metadata:
+  name: read-secrets
+  # RoleBinding 的名字空间决定了访问权限的授予范围。
+  # 这里隐含授权仅在 "development" 名字空间内的访问权限。
+  namespace: development
+subjects:
+- kind: User
+  name: dave # 'name' 是区分大小写的
+  apiGroup: rbac.authorization.k8s.io #用户所在的组
+roleRef:
+  kind: ClusterRole
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io # 角色所在的组
+```
+
+**使用ClusterRoleBinding可以对整个集群内所有命名空间资源权限进行授权。**
+
+例如：将名字为secret-reader的ClusterRole（在上面定义过了）权限授权给用户组manager，使其具有对全部命名空间内`secrets`资源的访问权限（get,watch,secrets）
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+# 此集群角色绑定允许 “manager” 组中的任何人访问任何名字空间中的 Secret 资源
+kind: ClusterRoleBinding
+metadata:
+  name: read-secrets-global
+subjects:
+- kind: Group
+  name: manager      # 'name' 是区分大小写的
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io
+```
+
+##### 28.2.4.1.5 Resources资源
+
+kubernetes集群内一些资源一般以其名称字符串来表示，这些字符串一般会在API的URL地址中出现；同时某些资源也会包含子资源，例如logs资源就属于pods的子资源，API中URL样例如下：
+
+```
+GET /api/v1/namespaces/{namespace}/pods/{name}/log
+```
+
+如果想要在RBAC授权模型中控制这些子资源的访问权限，**可以通过 / 分隔符**来实现，以下是一个定义Pods子资源logs访问权限的Role定义样例：
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: pod-reader
+rules:
+- apiGroups: [""] # "" 标明 core API 组
+  resources: ["pods/log"] # 只授予default命名空间下,只能查看所有pod日志的权限 
+  verbs: ["get", "watch", "list"]
+```
+
+> + 授权到`pods`就是`/api/v1/namespaces/{namespace}/pods` 则包含其子资源的授权（如log）
+> + 授权到`pods/log`就是`/api/v1/namespaces/{namespace}/pods/{name}/log` 则只包括所有pod下log子资源权限
+
+##### 28.2.4.1.6 xxxBinding中Subjects属性
+
+RoleBinding和ClusterRoleBinding可以将Role绑定到Subjects；Subjects可以是groups，users或者service account
+
++ Subjects中User使用字符串表示，可以是一个**普通的名字字符串**如"alice"，也可以是**email格式的邮箱地址**，甚至是**一组字符串形式的数字ID**。**但是Users的前缀**`system:`**是系统内部用户，集群管理员应确保普通用户不会使用这个前缀格式**
++ **Group的格式和User相同，都为一个字符串且没有格式要求**，但是同样不能使用`system:`
+
+
+
+##### 28.2.4.1.7 ClusterRole + RoleBinding的好处
+
+**ClusterRole + RoleBinding** 和 **Role + RoleBinding** 其实有各自的应用场景，它们不能完全相互替代。尽管两者都可以通过 **RoleBinding** 限制权限在特定的命名空间内，但 **ClusterRole + RoleBinding** 有其独特的优势和用途。以下是一些使用 **ClusterRole + RoleBinding** 的原因：
+
+1. **跨命名空间的通用权限**
+
+   - **ClusterRole** 可以定义**跨多个命名空间**共享的通用权限。
+
+   - 如果你想在多个命名空间中为某些用户或服务账户提供相同的权限，而不想为每个命名空间创建重复的 **Role**，使用 **ClusterRole** 是更高效的选择。通过一个 **ClusterRole** 定义好权限后，可以在多个命名空间中使用 **RoleBinding** 来绑定同一个 **ClusterRole**，避免重复定义。
+
+2. **对集群级别资源的命名空间内使用**
+
+​			虽然 **ClusterRole + RoleBinding** 不能让你在命名空间中访问集群级别的资源（如 `nodes`），但是某些 **ClusterRole** 定义的权限是跨命名空间的，或者能够访问特定的全局性资源，而这些资源并不存在于单个命名空间中。
+
+​			例如，一些控制器、监控工具或插件可能需要对不同命名空间中的相同类型的资源（如 Pods）执行相同的操作。在这种情况下，通过 **ClusterRole** 来定义权限是合理的选择。
+
+3. **标准化和减少重复**
+
+   - 如果你的集群有标准化的安全策略（如查看日志、监控或管理特定资源的权限），可以通过 **ClusterRole** 来统一管理这些权限，确保在所有命名空间中实现一致性。
+
+   - 如果每个命名空间都要手动创建 **Role**，一旦需要修改权限，你必须逐个修改每个命名空间内的 **Role**，而使用 **ClusterRole** 可以让你在一次定义后，在多个命名空间中重复使用。
+
+4. **访问集群级别资源的基础权限**
+
+​			有些 **ClusterRole** 需要用作基础权限，比如用于操作 `PersistentVolumes` 或 `ClusterRole` 本身等集群范围的资源。虽然这些权限通过 **RoleBinding** 限制在特定命名空间内，但角色的定义本身是跨命名空间共享的。例如，系统中的 `system:node` **ClusterRole** 定义了节点对集群范围资源的访问权限。
+
+
+
+#### 28.2.4.2 Node鉴权
+
+https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/node/
+
+#### 28.2.4.3 ABAC鉴权
+
+https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/abac/
+
+#### 28.2.4.4 Webhook鉴权
+
+https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/webhook/
+
+### 28.2.5 鉴权模式更改配置
+
+你可以仅使用[命令行参数](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#using-flags-for-your-authorization-module)， 或使用[配置文件](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#using-configuration-file-for-authorization)来配置 Kubernetes API 服务器的鉴权链，后者目前是 Beta 特性。
+
+你必须选择两种配置方法之一；不允许同时设置 `--authorization-config` 路径并使用 `--authorization-mode` 和 `--authorization-webhook-*` 命令行参数配置鉴权 Webhook。 如果你尝试这样做，API 服务器会在启动期间报告错误消息，然后立即退出。
+
+***命令行参数修改：***
+
+> 在apiserver上修改使用`apply`或`edit`都可以。kube-apiserver配置文件在`/etc/kubernetes/manifest/kube-apiserver.yaml `
+
+可以使用以下模式：
+
+- `--authorization-mode=ABAC`（基于属性的访问控制模式）
+- `--authorization-mode=RBAC`（基于角色的访问控制模式）
+- `--authorization-mode=Node`（节点鉴权组件）
+- `--authorization-mode=Webhook`（Webhook 鉴权模式）
+- `--authorization-mode=AlwaysAllow`（始终允许请求；存在[安全风险](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#warning-always-allow))
+- `--authorization-mode=AlwaysDeny`（始终拒绝请求）
+
+你可以选择多种鉴权模式；例如：`--authorization-mode=Node,Webhook`
+
+***配置文件修改：***
+
+参见官网：https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#using-configuration-file-for-authorization
+
+## 28.4 Admission Control 准入控制
+
+## 28.5 配置用户权限实战
+
+### 28.5.1 通过https证书配置用户权限
+
+> **k8s不管理用户，所以你可以配置任意用户名**
+
+1. 机器必须安装kubelet 
+
+2. linux机器上创建新用户 （默认linux用户会自动封装）
+
+   ```bash
+   $ sudo useradd devuser
+   $ sudo passwd devuser
+   ```
+
+3. 创建openssl配置https证书的配置文件 `devuser-csr.json`
+
+   ```json
+   
+   ```
+
+4. 
+
+### 28.5.2 
+
+## 28.6 创建ssl证书
+
+方法：https://kubernetes.io/zh-cn/docs/tasks/administer-cluster/certificates/
+
+1. 使用`easyrsa`
+2. 使用`openssl`
+3. 使用`cfssl`
+
+## 28.7 注意
+
+1. `apiGroups`中的组可以通过`kubectl api-resources -o wide`获取组和组组具有的操作
+   ![image-20241023171611820](./_media/image-20241023171611820.png)
+
+2. 系统内部用户和内部组
+
+   + ***API 发现角色***
+
+     无论是经过身份验证的还是未经过身份验证的用户， 默认的集群角色绑定都授权他们读取被认为是可安全地公开访问的 API（包括 CustomResourceDefinitions）。 如果要禁用匿名的未经过身份验证的用户访问，请在 API 服务器配置中添加 `--anonymous-auth=false` 的配置选项。
+
+     通过运行命令 `kubectl` 可以查看这些角色的配置信息:
+
+     | 默认 ClusterRole              | 默认 ClusterRoleBinding                                   | 描述                                                         |
+     | ----------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+     | **system:basic-user**         | **system:authenticated** 组                               | 允许用户以只读的方式去访问他们自己的基本信息。在 v1.14 版本之前，这个角色在默认情况下也绑定在 `system:unauthenticated` 上。 |
+     | **system:discovery**          | **system:authenticated** 组                               | 允许以只读方式访问 API 发现端点，这些端点用来发现和协商 API 级别。 在 v1.14 版本之前，这个角色在默认情况下绑定在 `system:unauthenticated` 上。 |
+     | **system:public-info-viewer** | **system:authenticated** 和 **system:unauthenticated** 组 | 允许对集群的非敏感信息进行只读访问，此角色是在 v1.14 版本中引入的。** |
+
+   + ***面向用户的角色***
+
+     一些默认的 ClusterRole 不是以前缀 `system:` 开头的。这些是面向用户的角色。 它们包括超级用户（Super-User）角色（`cluster-admin`）、 使用 ClusterRoleBinding 在集群范围内完成授权的角色（`cluster-status`）、 以及使用 RoleBinding 在特定名字空间中授予的角色（`admin`、`edit`、`view`）。
+
+     面向用户的 ClusterRole 使用 [ClusterRole 聚合](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles)以允许管理员在这些 ClusterRole 上添加用于定制资源的规则。如果想要添加规则到 `admin`、`edit` 或者 `view`， 可以创建带有以下一个或多个标签的 ClusterRole：
+
+     | **luster-admin** | **system:masters** 组 | 允许超级用户在平台上的任何资源上执行所有操作。 当在 **ClusterRoleBinding** 中使用时，可以授权对集群中以及所有名字空间中的全部资源进行完全控制。 当在 **RoleBinding** 中使用时，可以授权控制角色绑定所在名字空间中的所有资源，包括名字空间本身。 |
+     | ---------------- | --------------------- | ------------------------------------------------------------ |
+     | **admin**        | 无                    | 允许管理员访问权限，旨在使用 **RoleBinding** 在名字空间内执行授权。如果在 **RoleBinding** 中使用，则可授予对名字空间中的大多数资源的读/写权限， 包括创建角色和角色绑定的能力。 此角色不允许对资源配额或者名字空间本身进行写操作。 此角色也不允许对 Kubernetes v1.22+ 创建的 EndpointSlices（或 Endpoints）进行写操作。 更多信息参阅 [“EndpointSlices 和 Endpoints 写权限”小节](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/#write-access-for-endpoints)。 |
+     | **edit**         | 无                    | 允许对名字空间的大多数对象进行读/写操作。此角色不允许查看或者修改角色或者角色绑定。 不过，此角色可以访问 Secret，以名字空间中任何 ServiceAccount 的身份运行 Pod， 所以可以用来了解名字空间内所有服务账户的 API 访问级别。 此角色也不允许对 Kubernetes v1.22+ 创建的 EndpointSlices（或 Endpoints）进行写操作。 更多信息参阅 [“EndpointSlices 和 Endpoints 写操作”小节](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/#write-access-for-endpoints)。 |
+     | **view**         | 无                    | 允许对名字空间的大多数对象有只读权限。 它不允许查看角色或角色绑定。此角色不允许查看 Secret，因为读取 Secret 的内容意味着可以访问名字空间中 ServiceAccount 的凭据信息，进而允许利用名字空间中任何 ServiceAccount 的身份访问 API（这是一种特权提升）。 |
+
+   + ***核心组件角色***
+
+     | 默认 ClusterRole                   | 默认 ClusterRoleBinding                 | 描述                                                         |
+     | ---------------------------------- | --------------------------------------- | ------------------------------------------------------------ |
+     | **system:kube-scheduler**          | **system:kube-scheduler** 用户          | 允许访问 [scheduler](https://kubernetes.io/zh-cn/docs/reference/command-line-tools-reference/kube-scheduler/) 组件所需要的资源。 |
+     | **system:volume-scheduler**        | **system:kube-scheduler** 用户          | 允许访问 kube-scheduler 组件所需要的卷资源。                 |
+     | **system:kube-controller-manager** | **system:kube-controller-manager** 用户 | 允许访问[控制器管理器](https://kubernetes.io/zh-cn/docs/reference/command-line-tools-reference/kube-controller-manager/)组件所需要的资源。 各个控制回路所需要的权限在[控制器角色](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/#controller-roles)详述。 |
+     | **system:node**                    | 无                                      | 允许访问 kubelet 所需要的资源，**包括对所有 Secret 的读操作和对所有 Pod 状态对象的写操作。**你应该使用 [Node 鉴权组件](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/node/)和 [NodeRestriction 准入插件](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/admission-controllers/#noderestriction)而不是 `system:node` 角色。同时基于 kubelet 上调度执行的 Pod 来授权 kubelet 对 API 的访问。`system:node` 角色的意义仅是为了与从 v1.8 之前版本升级而来的集群兼容。 |
+     | **system:node-proxier**            | **system:kube-proxy** 用户              | 允许访问 [kube-proxy](https://kubernetes.io/zh-cn/docs/reference/command-line-tools-reference/kube-proxy/) 组件所需要的资源。 |
+
+   + ***其他组件角色***
+
+     | 默认 ClusterRole                         | 默认 ClusterRoleBinding                               | 描述                                                         |
+     | ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------ |
+     | **system:auth-delegator**                | 无                                                    | 允许将身份认证和鉴权检查操作外包出去。 这种角色通常用在插件式 API 服务器上，以实现统一的身份认证和鉴权。 |
+     | **system:heapster**                      | 无                                                    | 为 [Heapster](https://github.com/kubernetes/heapster) 组件（已弃用）定义的角色。 |
+     | **system:kube-aggregator**               | 无                                                    | 为 [kube-aggregator](https://github.com/kubernetes/kube-aggregator) 组件定义的角色。 |
+     | **system:kube-dns**                      | 在 **kube-system** 名字空间中的 **kube-dns** 服务账户 | 为 [kube-dns](https://kubernetes.io/zh-cn/docs/concepts/services-networking/dns-pod-service/) 组件定义的角色。 |
+     | **system:kubelet-api-admin**             | 无                                                    | 允许 kubelet API 的完全访问权限。                            |
+     | **system:node-bootstrapper**             | 无                                                    | 允许访问执行 [kubelet TLS 启动引导](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/kubelet-tls-bootstrapping/) 所需要的资源。 |
+     | **system:node-problem-detector**         | 无                                                    | 为 [node-problem-detector](https://github.com/kubernetes/node-problem-detector) 组件定义的角色。 |
+     | **system:persistent-volume-provisioner** | 无                                                    | 允许访问大部分[动态卷驱动](https://kubernetes.io/zh-cn/docs/concepts/storage/persistent-volumes/#dynamic)所需要的资源。 |
+     | **system:monitoring**                    | **system:monitoring** 组                              | 允许对控制平面监控端点的读取访问（例如：[kube-apiserver](https://kubernetes.io/zh-cn/docs/concepts/architecture/#kube-apiserver) 存活和就绪端点（`/healthz`、`/livez`、`/readyz`）， 各个健康检查端点（`/healthz/*`、`/livez/*`、`/readyz/*`）和 `/metrics`）。 请注意，各个运行状况检查端点和度量标准端点可能会公开敏感信息。 |
+
+   + ***内置控制器的角色***
+
+     Kubernetes [控制器管理器](https://kubernetes.io/zh-cn/docs/reference/command-line-tools-reference/kube-controller-manager/)运行内建于 Kubernetes 控制面的[控制器](https://kubernetes.io/zh-cn/docs/concepts/architecture/controller/)。 当使用 `--use-service-account-credentials` 参数启动时，kube-controller-manager 使用单独的服务账户来启动每个控制器。 每个内置控制器都有相应的、前缀为 `system:controller:` 的角色。 如果控制管理器启动时未设置 `--use-service-account-credentials`， 它使用自己的身份凭据来运行所有的控制器，该身份必须被授予所有相关的角色。 这些角色包括：
+
+     - `system:controller:attachdetach-controller`
+     - `system:controller:certificate-controller`
+     - `system:controller:clusterrole-aggregation-controller`
+     - `system:controller:cronjob-controller`
+     - `system:controller:daemon-set-controller`
+     - `system:controller:deployment-controller`
+     - `system:controller:disruption-controller`
+     - `system:controller:endpoint-controller`
+     - `system:controller:expand-controller`
+     - `system:controller:generic-garbage-collector`
+     - `system:controller:horizontal-pod-autoscaler`
+     - `system:controller:job-controller`
+     - `system:controller:namespace-controller`
+     - `system:controller:node-controller`
+     - `system:controller:persistent-volume-binder`
+     - `system:controller:pod-garbage-collector`
+     - `system:controller:pv-protection-controller`
+     - `system:controller:pvc-protection-controller`
+     - `system:controller:replicaset-controller`
+     - `system:controller:replication-controller`
+     - `system:controller:resourcequota-controller`
+     - `system:controller:root-ca-cert-publisher`
+     - `system:controller:route-controller`
+     - `system:controller:service-account-controller`
+     - `system:controller:service-controller`
+     - `system:controller:statefulset-controller`
+     - `system:controller:ttl-controller`
+
+3. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # k8s调试模式
 
 + --v=6
 + --dry-run=client/server 用于测试命令是否正确，不会创建资源。client只用于本地验证，server发送到服务端进行验证
+
+# **集群级别的资源**
+
