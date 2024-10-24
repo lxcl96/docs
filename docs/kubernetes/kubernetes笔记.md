@@ -8372,7 +8372,7 @@ kubeconfig举例：
 
 > [!Note]
 >
-> **ServiceAccount是为Pod内容器访问apiserver而创建的。**
+> **ServiceAccount是为Pod内容器访问apiserver而创建的。**pod容器中serviceaccount默认挂载目录：`/run/secrets/kubernetes.io/serviceccount`.里面就有上面的三个部分:**token,ca.crt,namespace**
 
 因为Pod的创建、销毁是动态的，所以要为他手动生成证书就不可行（太消耗资源了）。kubernetes使用serviceaccount解决pod访问apiserver的认证问题。
 
@@ -8388,6 +8388,14 @@ kubeconfig举例：
 - 外部服务需要与 Kubernetes API 服务器进行通信。例如，作为 CI/CD 流水线的一部分向集群作身份认证。
 - 你在集群中使用了第三方安全软件，该软件依赖不同 Pod 的 ServiceAccount 身份，按不同上下文对这些 Pod 分组。
 
+
+
+==**创建流程：**==
+
+当你在 Kubernetes 中创建 Pod 时，默认情况下，Kubernetes 会为该 Pod 绑定一个 **ServiceAccount**（通常是 `default` ServiceAccount，除非你显式指定了其他 ServiceAccount）。
+
+**Kubernetes 会自动为该 Pod 生成一个与 ServiceAccount 关联的 Token**，并将它作为 Secret 挂载到 Pod 的文件系统中，具体路径为：`/run/secrets/kubernetes.io/serviceaccount/token`
+
 ### 28.1.7 Secret和ServiceAccount关系
 
 kubernetes设计了一种资源叫做Secret分为两类：一种是用于ServiceAccount的service-account-token，另一种是用于保存用户自定义保密信息的Opaque。
@@ -8400,7 +8408,24 @@ ServiceAccount中用到三个部分：
 
 默认情况下，每个namespace都会有一个叫default的serviceaccount，如果pod在创建时没有指定serviceaccount，那么就会使用pod所属的namespace的serviceaccount即名字叫default的serviceaccount。
 
-pod容器中serviceaccount默认挂载目录：`/run/secrets/kubernetes.io/servicesccount`.里面就有上面的三个部分:**token,ca.crt,namespace**
+> pod容器中serviceaccount默认挂载目录：`/run/secrets/kubernetes.io/serviceccount`.里面就有上面的三个部分:**token,ca.crt,namespace**
+>
+
+### 28.1.8 JWT详解(Bearer Token)
+
+JWT即Bearer Token有三部分组成，每部分由`.`分割
+
++ **Header** 头部
+
+  是Base64编码后的数据，用于声明类型和签名算法。
+
++ **Payload ** 负载，即传递的数据
+
+  里面是实际的数据，在k8s中Bearer Token如ServiceAccount Token就是使用**base64编码的**
+
++ **Signature** 签名
+
+  指定的签名算法（如 HMAC SHA256）对前两部分进行签名，以确保数据的完整性。
 
 ## 28.2 Authorization 鉴权
 
@@ -8740,6 +8765,16 @@ https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/abac/
 
 https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/webhook/
 
+#### 28.2.4.4 bootstrap token鉴权
+
+参考文档：https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/bootstrap-tokens/
+
+启动引导令牌是一种简单的持有者令牌（Bearer Token），这种令牌是在新建集群 或者在现有集群中添加新节点时使用的。 它被设计成能够支持 [`kubeadm`](https://kubernetes.io/zh-cn/docs/reference/setup-tools/kubeadm/)， 但是也可以被用在其他的案例中以便用户在不使用 `kubeadm` 的情况下启动集群。 它也被设计成可以通过 RBAC 策略，结合 [kubelet TLS 启动引导](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/kubelet-tls-bootstrapping/) 系统进行工作。
+
+启动引导令牌被定义成一个特定类型的 Secret（`bootstrap.kubernetes.io/token`）， 并存在于 `kube-system` 名字空间中。 这些 Secret 会被 API 服务器上的启动引导认证组件（Bootstrap Authenticator）读取。 控制器管理器中的控制器 TokenCleaner 能够删除过期的令牌。 这些令牌也被用来在节点发现的过程中会使用的一个特殊的 ConfigMap 对象。 BootstrapSigner 控制器也会使用这一 ConfigMap
+
+> 只能用于**引导新节点加入集群，并自动配置和签发客户端证书**
+
 ### 28.2.5 鉴权模式更改配置
 
 你可以仅使用[命令行参数](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#using-flags-for-your-authorization-module)， 或使用[配置文件](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/authorization/#using-configuration-file-for-authorization)来配置 Kubernetes API 服务器的鉴权链，后者目前是 Beta 特性。
@@ -8767,38 +8802,311 @@ https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/webhook/
 
 ## 28.4 Admission Control 准入控制
 
-## 28.5 配置用户权限实战
+参考文档：https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/admission-controllers/#what-are-they
+
+准入控制是apiserver的插件集合，通过添加不同的插件，实现额外的准入控制规则。
+
+**准入控制器（Admission Controller）** 是 Kubernetes 集群中的一类插件，用来拦截和处理 API 请求，以控制集群资源的创建、修改和删除等操作。它们在资源持久化之前生效，可以基于集群的安全、资源配额、策略等进行额外的检查或修改。准入控制器是 Kubernetes 安全和治理的一部分，帮助确保资源的合法性、合规性和安全性。
+
+### 准入控制器的作用
+
+当用户或系统通过 API Server 向 Kubernetes 提交请求（如创建 Pod、修改资源配额）时，准入控制器负责审查这些请求。其执行的主要操作包括：
+
+1. **验证**：检查请求是否符合特定策略或规则。
+2. **修改**：根据特定策略动态修改资源对象（如自动填充默认值）。
+3. **拒绝**：如果请求不符合策略或规则，则直接拒绝请求。
+
+### 准入控制器的工作流程
+
+1. **客户端请求**：用户通过 `kubectl` 或其他方式发出 API 请求（例如创建一个 Pod）。
+2. **认证和授权**：首先通过 Kubernetes 的认证（Authentication）和授权（Authorization）机制来确认请求者的身份和权限。
+3. **准入控制器处理：**
+   - 请求通过认证和授权后，准入控制器接管请求，并根据预定义的逻辑对其进行审查或修改。
+   - 如果请求通过所有启用的准入控制器检查，API Server 会继续处理并将资源保存到 etcd 中。
+4. **持久化**：通过审查的请求会被存储并执行，拒绝的请求则会返回错误。
+
+### 常见的准入控制器类型
+
+Kubernetes 提供了多种内置的准入控制器，常见的有：
+
+1. **NamespaceLifecycle**：限制操作只能在存在的命名空间中执行，防止删除系统关键命名空间。
+2. **LimitRanger**：确保 Pod 的资源请求和限制在定义的范围内。
+3. **PodSecurityPolicy**（已废弃，使用 Pod Security Standards 替代）：对 Pod 进行安全策略检查，确保 Pod 符合安全要求。
+4. **ResourceQuota**：限制命名空间内的资源使用，确保其不会超出配额。
+5. **MutatingAdmissionWebhook**：允许通过外部服务对资源进行动态修改，如自动添加标签、注解等。
+6. **ValidatingAdmissionWebhook**：允许通过外部服务对请求进行验证，阻止不符合策略的请求。
+
+### 准入控制器的分类
+
+准入控制器大致可以分为两类：
+
+1. **Mutating Admission Controller**（可变准入控制器）：可以修改资源的对象，例如为 Pod 自动添加 sidecar 容器。常见例子有 `MutatingAdmissionWebhook`。
+2. **Validating Admission Controller**（验证准入控制器）：用于验证请求是否合法，并做出决策是允许还是拒绝，例如 `PodSecurity`。
+
+### 准入控制器的配置
+
+准入控制器可以通过 Kubernetes API Server 的 `--enable-admission-plugins` 参数来启用或禁用。
+
+准入控制插件大全（及作用）：https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/admission-controllers/#what-does-each-admission-controller-do
+
+## 28.5 ==*配置用户权限实战*==
 
 ### 28.5.1 通过https证书配置用户权限
 
 > **k8s不管理用户，所以你可以配置任意用户名**
 
-1. 机器必须安装kubelet 
+1. 机器必须安装kubelet ,kubectl
 
-2. linux机器上创建新用户 （默认linux用户会自动封装）
+2. [28.6 创建ssl证书并授权](#28.6 创建ssl证书并授权)
+
+
+### 28.5.2 bootstrap token(仅用于新节点加入)
+
+**无法实现，只能用于引导新节点加入集群、自动配置和签发客户端证书**
+
+> 就是`kubeadm token list`中的
+
+### 28.5.3 ServiceAccount token (就是Bearer token的实现)
+
+> **ServiceAccount token 就是Bearer token(是规范)一种实现形式**
+
+1. 指定服务账户ServiceAccount的token （**注意，sa详细信息是存在secret中的**）
 
    ```bash
-   $ sudo useradd devuser
-   $ sudo passwd devuser
+   # 如果创建pod不指定sa，默认就是当前命名空间下的default（sa就叫这个名字）
+   kubectl get secret $(kubectl get sa default -o jsonpath='{.secrets[0].name}') -o jsonpath='{.data.token}' | base64 --decode
    ```
 
-3. 创建openssl配置https证书的配置文件 `devuser-csr.json`
+2. 打开postman等接口工具，测试
+
+   + 地址`https://<API_SERVER_IP>:6443/api/v1/namespaces/default/pods`
+   + 请求头`Authorization: Bearer <your-token>`或者在Authorization中选择`Bearer Token`填入第一步获得的token
+
+3. 发现报错，(**没权限列出默认命名空间的pod**)
 
    ```json
-   
+   //default命名空间下的名字叫default的serviceaccount无法列出pod资源，原因没权限
+   {
+       "kind": "Status",
+       "apiVersion": "v1",
+       "metadata": {},
+       "status": "Failure",
+       "message": "pods is forbidden: User \"system:serviceaccount:default:default\" cannot list resource \"pods\" in API group \"\" in the namespace \"default\"",
+       "reason": "Forbidden",
+       "details": {
+           "kind": "pods"
+       },
+       "code": 403
+   }
    ```
 
-4. 
+4. 创建`Role`和`RoleBinding`给ServiceAccount权限
 
-### 28.5.2 
+   ```bash
+   # 创建一个 Role，允许列出 Pods 资源
+   kubectl create role pod-reader --verb=get,list,watch --resource=pods --namespace=default
+   
+   # 绑定这个 Role 到 default 服务账户
+   kubectl create rolebinding default-pod-reader --role=pod-reader --serviceaccount=default:default --namespace=default
+   ```
 
-## 28.6 创建ssl证书
+5. postman再次尝试发送请求,**成功列出default命名空间下的pod**
 
-方法：https://kubernetes.io/zh-cn/docs/tasks/administer-cluster/certificates/
+> [!Attention]
+>
+> **在同一命名空间，ServiceAccount中的token和Pod中token**`/run/secrets/kubernetes.io/serviceaccount/token`**效果完全一样**，因为是同一个serviceaccount账户(pod默认使用叫default的serviceaccount)。区别之处在二者的生命周期长度：
+>
+> + **ServiceAccount保存在secret中的token长期有效(旧版本)**
+> + **任意pod容器中serviceaccount token**`/run/secrets/kubernetes.io/serviceaccount/token`**是短期有效的（会自动更换）**
+> + 执行命令`echo $TOKEN | cut -d '.' -f 2 | base64 --decode`可以看到时间
 
-1. 使用`easyrsa`
-2. 使用`openssl`
-3. 使用`cfssl`
+## 28.6 创建ssl证书并授权
+
+### 28.6.1 大概思路
+
+1. 创建出客户端`.key`,`.csr`文件，利用k8s集群的根CA`/etc/kubernetes/pki/ca.crt`和`/etc/kubernetes/pki/ca.key`对客户端证书进行签发，生成客户端`.crt`文件
+2. 创建出`kubeconfig`文件，配置`cluster`集群信息、`credentials`客户端认证信息、`context`k8s上下文信息
+3. 将生成的`kubeconfig`文件放到你需要的地方：如其他客户端的**任意用户名**上（`~/.kube/config`）
+4. 客户端上执行命令，使用刚才下载的`~/.kube/config`即kubeconfig文件切换k8s上下文
+5. 测试，无权限
+6. 授予权限
+7. 再次测试
+
+> 如果是到接口工具上如postman测试，可以跳过第五步，将第一步生成的客户端`.key`，`.crt`证书导入接口工具`settings-Certificates-add Client Certificates`即可（发送请求他会自动配置）
+
+### 28.6.2 具体步骤
+
+1. 创建出客户端`.key`，`.crt`,`.csr`文件（**需要指定用户名，或组**）
+
+   方法：https://kubernetes.io/zh-cn/docs/tasks/administer-cluster/certificates/ (**需要注意,里面不是使用k8s根CA签发的证书**)
+
+   + 使用`easyrsa`
+
+   + 使用`openssl`
+
+     ```ini
+     #devuser-csr.conf
+     [ req ]
+     default_bits = 2048
+     prompt = no
+     default_md = sha256
+     req_extensions = req_ext
+     distinguished_name = dn
+     
+     [ dn ]
+     C = CN
+     ST = JiangSu
+     L = SuZhou
+     O = k8s # 对应k8s中 组
+     OU = development
+     CN = devuser # 对应k8s中 用户
+     
+     [ req_ext ]
+     subjectAltName = @alt_names
+     
+     [ alt_names ]
+     DNS.1 = kubernetes
+     DNS.2 = kubernetes.default
+     DNS.3 = kubernetes.default.svc
+     DNS.4 = kubernetes.default.svc.cluster
+     DNS.5 = kubernetes.default.svc.cluster.local
+     IP.1 = 192.168.136.151
+     IP.2 = 10.96.0.0
+     
+     [ v3_ext ]
+     authorityKeyIdentifier=keyid,issuer:always
+     basicConstraints=CA:FALSE
+     keyUsage=keyEncipherment,dataEncipherment
+     extendedKeyUsage=serverAuth,clientAuth
+     subjectAltName=@alt_names
+     ```
+
+     ```bash
+     # 1.生成客户端的 key文件
+     sudo openssl genrsa -out devuser.key 2048
+     # 2.根据key生成csr文件
+     sudo openssl req -new -key devuser.key -out devuser.csr -config devuser-csr.conf
+     # 3.利用k8s集群的根CA`/etc/kubernetes/pki/ca.crt`和`/etc/kubernetes/pki/ca.key`对客户端证书进行签发，生成客户端crt证书
+     sudo openssl x509 -req -in devuser.csr \
+     	-CA /etc/kubernetes/pki/ca.crt \    # K8s根CA
+     	-CAkey /etc/kubernetes/pki/ca.key \
+         -CAcreateserial -out devuser.crt -days 10000 \ # 证书有效期
+         -extensions v3_ext -extfile devuser-csr.conf -sha256 # devuser-csr.conf见上面
+     ```
+
+     > 也可以不使用`devuser-csr.conf`配置文件，直接一个命令
+     >
+     > ```bash
+     > # 1.生成客户端的 key文件
+     > sudo openssl genrsa -out devuser.key 2048
+     > # 2.根据key生成csr文件 (直接定义CN，O)
+     > sudo openssl req -new -key devuser.key -out devuser.csr -subj "/CN=admin/O=k8s"
+     > # 3. 利用k8s集群的根CA对客户端证书进行签发，生成客户端crt证书
+     > sudo openssl x509 -req -in devuser.csr \
+     > -CA /etc/kubernetes/pki/ca.crt \
+     > -CAkey /etc/kubernetes/pki/ca.key \
+     > -CAcreateserial -out devuser.crt -days 10000
+     > ```
+
+   + 使用`cfssl`
+
+2. 创建出`kubeconfig`文件，配置`cluster`集群信息、`credentials`客户端认证信息、`context`k8s上下文信息
+
+   ```bash
+   export KUBE_APISERVER="https://192.168.136.151:6443"
+   # 1.配置`cluster`集群信息到 devuser.kubeconfig 文件
+   kubectl config set-cluster kubernetes \
+   --certificate-authority=/etc/kubernetes/pki/ca.crt \ # k8s根ca
+   --embed-certs=true \
+   --server=${KUBE_APISERVER} \
+   --kubeconfig=devuser.kubeconfig # 输出的kubeconfig文件
+   
+   # 2.配置credentials`客户端认证信息
+   kubectl config set-credentials devuser \
+   --client-certificate=devuser.crt \ # 第一步生成的客户端 .crt文件
+   --client-key=devuser.key \  # 第一步生成的客户端 .key文件
+   --embed-certs=true \
+   --kubeconfig=devuser.kubeconfig # 追加到上一步生成的kubeconfig
+   
+   # 3.`context`k8s上下文信息
+   kubectl config set-context kubernetes \
+   --cluster=kubernetes \
+   --user=devuser \ # 和证书的CN一样
+   --namespace=default \ # 指定命名空间
+   --kubeconfig=devuser.kubeconfig # 追加到上一步生成的kubeconfig
+   ```
+
+3. 将生成的`kubeconfig`文件放到你需要的地方：如其他客户端的**任意用户**上（`~/.kube/config`）
+
+   ```bash
+   # 比如另一台机器上的，或当前机器的另一个账户
+   # 上面生成的kubeconfig
+   scp lxx@192.168.136.151:/home/lxx/tmp/authorizationtest/https/tom/tom.kubeconfig /home/tom/.kube/config
+   ```
+
+   > 用户名随便，root,devuser,tom,jerry都可以，最后请求的用户名都是kubeconfig中的user
+
+4. 客户端上执行命令，使用刚才下载的`~/.kube/config`即kubeconfig文件切换k8s上下文
+
+   ```bash
+   # 可以不指定--kubeconfig ,那就会走kubectl默认的环境变量配置
+   kubectl config use-context kubernetes --kubeconfig=/home/tom/.kube/config
+   ```
+
+5. 测试，无权限
+
+   ```bash
+   [tom@k8s-node2 .kube]$ kubectl get pod
+   Error from server (Forbidden): pods is forbidden: User "tom" cannot list resource "pods" in API group "" in the namespace "default"
+   ```
+
+6. 授予权限
+
+   效果就是，后面你授权的任意用户可以不用再配置了，只要改用户属于**k8s组**（累加的权限）
+
+   ```bash
+   # 将用户 devuser绑定到 内置的集群用户admin上
+   # 将组 k8s绑定到 内置的集群用户admin上 
+   # 授权用户devuser 和组k8s只有default命名空间的权限
+   create rolebinding devuser-admin-binding --clusterrole=admin --user=devuser  --group=k8s --namespace=default
+   ```
+
+7. 再次测试，权限成功**只有默认default命名空间的权限**
+
+   ```bash
+   [tom@k8s-node2 .kube]$ kubectl get pod
+   NAME                                     READY   STATUS    RESTARTS      AGE
+   busybox                                  1/1     Running   2 (17h ago)   15d
+   [tom@k8s-node2 .kube]$ kubectl get pod -A
+   Error from server (Forbidden): pods is forbidden: User "tom" cannot list resource "pods" in API group "" at the cluster scope
+   ```
+
+### 28.6.3 kubeconfig文件形式
+
+当客户端发出请求时，API Server 提供自己的证书，客户端根据 `kubeconfig` 中的 `certificate-authority-data`，验证该证书是否是由正确的 CA 签发的。如果验证通过，客户端才会信任该服务器并继续通信。
+
+```yaml
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: xxx # 验证apiserver的CA证书
+    server: https://192.168.136.151:6443
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    namespace: default
+    user: devuser
+  name: kubernetes
+current-context: kubernetes
+kind: Config
+preferences: {}
+users:
+- name: devuser
+  user:
+    client-certificate-data: xxx # 客户端 公钥
+    client-key-data: xxx # 客户端 私钥
+```
 
 ## 28.7 注意
 
@@ -8889,21 +9197,180 @@ https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/webhook/
 
 3. 
 
+## 28.8 serviceaccount注意事项
+
+当你在 Kubernetes 中创建 Pod 时，默认情况下，Kubernetes 会为该 Pod 绑定一个 **ServiceAccount**（通常是 `default` ServiceAccount，除非你显式指定了其他 ServiceAccount）。
+
+**Kubernetes 会自动为该 Pod 生成一个与 ServiceAccount 关联的 Token**，并将它作为 Secret 挂载到 Pod 的文件系统中，具体路径为：`/run/secrets/kubernetes.io/serviceaccount/token`
+
+> [!Attention]
+>
+> **在同一命名空间，ServiceAccount中的token和Pod中token**`/run/secrets/kubernetes.io/serviceaccount/token`**效果完全一样**，因为是同一个serviceaccount账户(pod默认使用叫default的serviceaccount)。区别之处在二者的生命周期长度：
+>
+> + **ServiceAccount保存在secret中的token长期有效(旧版本)**
+> + **任意pod容器中serviceaccount token**`/run/secrets/kubernetes.io/serviceaccount/token`**是短期有效的（会自动更换）**
+> + 执行命令`echo $TOKEN | cut -d '.' -f 2 | base64 --decode`可以看到过期时间毫秒数exp
+> + linux执行`date -d @exp`查看到期时间（exp就是上步获取的过期时间）
 
 
 
+## 28.9 无论是基于HTTPS证书的User、Group还是基于BearerToken 的ServiceAccount Token如果想要读取资源都要配置RoleBinding或ClusterRoleBinding。否则都是只过了认证authentication，没过授权authorization。
 
+> 无论是基于HTTPS证书的User、Group还是基于BearerToken 的ServiceAccount Token（Pod内或外面的）如果想要读取资源都要配置RoleBinding或ClusterRoleBinding。否则都是只过了认证authentication，没过授权authorization。
+>
 
+# 29. 资源限制
 
+## 29.1 LimitRange限制范围
 
+`LimitRange` **用于定义 Pod 或容器在命名空间中的最小、最大资源使用限制**（包括 CPU 和内存），并为 Pod 自动设置默认的资源请求和限制。它可以确保容器不会滥用资源，避免因为缺少配置导致的资源耗尽或过度占用。
 
+### 29.1.0 api文档
 
++ LimitRange 参考文档：https://kubernetes.io/zh-cn/docs/concepts/policy/limit-range/
++ LimitRange api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/policy-resources/limit-range-v1/
 
+### 29.1.1 介绍
 
+LimitRange 是限制命名空间内可为每个适用的对象类别 （例如 Pod 或 [PersistentVolumeClaim](https://kubernetes.io/zh-cn/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims)） 指定的资源分配量（限制和请求）的策略对象。
 
+一个 **LimitRange（限制范围）** 对象提供的限制能够做到：
 
+- 在一个命名空间中实施对**每个 Pod 或 Container 最小和最大的资源**使用量的限制。
+- 在一个命名空间中实施对每个 [PersistentVolumeClaim](https://kubernetes.io/zh-cn/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) 能申请的最小和最大的存储空间大小的限制。
+- 在一个命名空间中实施对一种资源的申请值和限制值的比值的控制。
+- 设置一个命名空间中对计算资源的默认申请/限制值，并且自动的在运行时注入到多个 Container 中。
 
+**当某命名空间中有一个 LimitRange 对象时，将在该命名空间中实施 LimitRange 限制。**
 
+> LimitRange 的名称必须是合法的 [DNS 子域名](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/names#dns-subdomain-names)。
+
+### 29.1.2 执行流程
+
+- 管理员在一个命名空间内创建一个 `LimitRange` 对象。
+- 用户在此命名空间内创建（或尝试创建） Pod 和 PersistentVolumeClaim 等对象。
+- 首先，`LimitRange` 准入控制器对所有没有设置计算资源需求的所有 Pod（及其容器）设置默认请求值与限制值。
+- 其次，`LimitRange` 跟踪其使用量以保证没有超出命名空间中存在的任意 `LimitRange` 所定义的最小、最大资源使用量以及使用量比值。
+- 若尝试创建或更新的对象（Pod 和 PersistentVolumeClaim）违反了 `LimitRange` 的约束， 向 API 服务器的请求会失败，并返回 HTTP 状态码 `403 Forbidden` 以及描述哪一项约束被违反的消息。
+- 若你在命名空间中添加 `LimitRange` 启用了对 `cpu` 和 `memory` 等计算相关资源的限制， 你必须指定这些值的请求使用量与限制使用量。否则，系统将会拒绝创建 Pod。
+- `LimitRange` 的验证仅在 Pod 准入阶段进行，不对正在运行的 Pod 进行验证。 如果你添加或修改 LimitRange，命名空间中已存在的 Pod 将继续不变。
+- 如果命名空间中存在两个或更多 `LimitRange` 对象，应用哪个默认值是不确定的。
+
+### 29.1.3 使用
+
+apiserver添加启动参数`--enable-admission-plugins=LimitRange`启用。
+
+当命名空间中存在一个 ResourceQuota 对象时，对于该命名空间而言，资源配额就是开启的。
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cpu-resource-constraint
+spec:
+  limits:
+  - default: # 此处定义默认限制值
+      cpu: 500m
+    defaultRequest: # 此处定义默认请求值
+      cpu: 500m
+    max: # max 和 min 定义限制范围
+      cpu: "1"
+    min:
+      cpu: 100m
+    type: Container
+```
+
+## 29.2 ResourceQuota资源配额
+
+`ResourceQuota` 是 Kubernetes 提供的一种原生机制，**用于限制某个namespace命名空间内资源的总量**。它可以用来限制 CPU、内存、存储以及某些对象的数量（如 Pod、Service、PersistentVolumeClaim 等）。
+
+### 29.2.0 api文档
+
++ ResourceQuota 介绍文档：https://kubernetes.io/zh-cn/docs/concepts/policy/resource-quotas/
++ ResourceQuota api文档：https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/policy-resources/resource-quota-v1/
+
+### 29.2.1 介绍
+
+当多个用户或团队共享具有固定节点数目的集群时，人们会担心有人使用超过其基于公平原则所分配到的资源量。
+
+资源配额是帮助管理员解决这一问题的工具。
+
+资源配额，通过 `ResourceQuota` 对象来定义，对每个命名空间的资源消耗总量提供限制。 它可以限制命名空间中某种类型的对象的总数目上限，也可以限制命名空间中的 Pod 可以使用的计算资源的总上限。
+
+下面是使用命名空间和配额构建策略的示例：
+
+- 在具有 32 GiB 内存和 16 核 CPU 资源的集群中，允许 A 团队使用 20 GiB 内存 和 10 核的 CPU 资源， 允许 B 团队使用 10 GiB 内存和 4 核的 CPU 资源，并且预留 2 GiB 内存和 2 核的 CPU 资源供将来分配。
+- 限制 "testing" 命名空间使用 1 核 CPU 资源和 1GiB 内存。允许 "production" 命名空间使用任意数量。
+
+在集群容量小于各命名空间配额总和的情况下，可能存在资源竞争。资源竞争时，Kubernetes 系统会遵循先到先得的原则。
+
+不管是资源竞争还是配额的修改，都不会影响已经创建的资源使用对象。
+
+> ResourceQuota 对象的名称必须是合法的 [DNS 子域名](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/names#dns-subdomain-names)。
+
+### 29.2.2 执行流程
+
+资源配额的工作方式如下：
+
+- 不同的团队可以在不同的命名空间下工作，这可以通过 [RBAC](https://kubernetes.io/zh-cn/docs/reference/access-authn-authz/rbac/) 强制执行。
+- 集群管理员可以为每个命名空间创建一个或多个 ResourceQuota 对象。
+- 当用户在命名空间下创建资源（如 Pod、Service 等）时，Kubernetes 的配额系统会跟踪集群的资源使用情况， 以确保使用的资源用量不超过 ResourceQuota 中定义的硬性资源限额。
+- 如果资源创建或者更新请求违反了配额约束，那么该请求会报错（HTTP 403 FORBIDDEN）， 并在消息中给出有可能违反的约束。
+- 如果命名空间下的计算资源（如 `cpu` 和 `memory`）的配额被启用， 则用户必须为这些资源设定请求值（request）和约束值（limit），否则配额系统将拒绝 Pod 的创建。 提示: 可使用 `LimitRanger` 准入控制器来为没有设置计算资源需求的 Pod 设置默认值。
+
+### 29.2.3 使用
+
+apiserver添加启动参数`--enable-admission-plugins=ResourceQuota`启用。
+
+当命名空间中存在一个 ResourceQuota 对象时，对于该命名空间而言，资源配额就是开启的。
+
+```yaml
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: ResourceQuota
+  metadata:
+    name: pods-high
+  spec:
+    hard:
+      cpu: "1000"
+      memory: 200Gi
+      pods: "10"
+    scopeSelector:
+      matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values: ["high"]
+- apiVersion: v1
+  kind: ResourceQuota
+  metadata:
+    name: pods-medium
+  spec:
+    hard:
+      cpu: "10"
+      memory: 20Gi
+      pods: "10"
+    scopeSelector:
+      matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values: ["medium"]
+- apiVersion: v1
+  kind: ResourceQuota
+  metadata:
+    name: pods-low
+  spec:
+    hard:
+      cpu: "5"
+      memory: 10Gi
+      pods: "10"
+    scopeSelector:
+      matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values: ["low"]
+```
 
 
 
