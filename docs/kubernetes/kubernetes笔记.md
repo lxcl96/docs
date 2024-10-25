@@ -3378,48 +3378,7 @@ ingress-nginx 官网安装向导：https://kubernetes.github.io/ingress-nginx/de
 
 ### 18.1.1 安装helm
 
-helm官网安装指南：https://helm.sh/zh/docs/intro/install/
-
-> 安装前查看：https://helm.sh/zh/docs/topics/version_skew/下载与当前kubernetes版本对应的helm版本
-
-+ 脚本安装
-
-  ```bash
-  $ curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-  $ chmod 700 get_helm.sh
-  $ ./get_helm.sh
-  ###或者下面一条命令
-  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  ```
-
-+ 包管理器安装
-
-  + homebrew--针对macos
-  + chocolatey--针对windows
-  + scoop--针对windows
-  + winget--针对windows
-  + apt--针对Debian或Ubuntu
-  + dnf/yum 针对fedora
-  + 等等
-
-+ **二进制文件安装（推荐）**
-
-  ```bash
-  # 1.查看当前kubernetes版本
-  $kubectl version # 我的k8s是v1.23.17版本（GitVersion）
-  # 2.对照helm版本表选出支持的helm版本  https://helm.sh/zh/docs/topics/version_skew/
-  	我选择helm-3.10.x
-  # 3.访问https://github.com/helm/helm/releases 确定要下载的helm版本 (注意下载链接不在Assets中)
-  	我选择helm-3.10.3
-  # 4.下载helm-3.10.3二进制文件
-  $wget https://get.helm.sh/helm-v3.10.3-linux-amd64.tar.gz #Installation and Upgrading 标题下（Linux amd64）
-  # 5. 解压helm-3.10.3
-  $tar -zxvf helm-v3.10.3-linux-amd64.tar.gz
-  # 6. 拷贝helm到/user/local/bin
-  $sudo cp linux-amd64/helm /usr/local/bin/
-  # 7.验证helm是否成功安装
-  $helm version # version.BuildInfo{Version:"v3.10.3", GitCommit:"835b7334cfe2e5e27870ab3ed4135f136eecc704", GitTreeState:"clean", GoVersion:"go1.18.9"}
-  ```
+见[30.2 安装Helm](#30.2 安装Helm)
 
 
 ### 18.1.2 helm添加ingress-nginx仓库
@@ -5899,9 +5858,8 @@ spec:
 
    ```bash
    $ sudo mkdir -p /data/nfs/ro /data/nfs/rw
-   $  
    ```
-
+   
 5. 设置共享目录export
 
    ```bash
@@ -6317,7 +6275,7 @@ https://kubernetes.io/zh-cn/docs/concepts/storage/storage-classes/#aws-ebs
 
 > 注意，一些外部StorageClass的provisioner需要搭配CSI驱动来实现动态制备，所以需要自己安装CSI插件（以Pod运行）。
 
-## 22.8 **PV的使用（动态构建）**
+## 22.8 ==**PV的使用（动态构建）**==
 
 > **PV的动态制备都依赖于RBAC获取访问权限**
 
@@ -6964,7 +6922,7 @@ PV的动态制备有很多插件可以选择，下面以两种方案操作：
    # 具体特性依据不同的制备器provisioner，和底层存储卷
    ```
 
-4. **安装provisioner制备器用来制备PV，实际就是一个Pod**（最重要的一步）`nfs-provisioner.yaml`
+4. **安装provisioner制备器用来制备PV，实际就是一个Pod**（最重要的一步）`nfs-provisioner-deployment.yaml`
 
    ```yaml
    # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
@@ -9221,9 +9179,27 @@ users:
 
 # 29. 资源限制
 
+> [!Note]
+>
+> 注意生效的范围:
+>
+> 1. ResourceQuota是对**一个namespace命名空间整体资源**(整体)
+> 2. LimitRange是对**一个namespace命名空间内所有Pod**(每个个体)
+> 3. pod中定义cpu`1m`表示**1毫核**，`1`表示为**1核**。（**1核=1000毫核**）
+
 ## 29.1 LimitRange限制范围
 
-`LimitRange` **用于定义 Pod 或容器在命名空间中的最小、最大资源使用限制**（包括 CPU 和内存），并为 Pod 自动设置默认的资源请求和限制。它可以确保容器不会滥用资源，避免因为缺少配置导致的资源耗尽或过度占用。
+`LimitRange` **用于定义 Pod 或容器在命名空间中的最小、最大资源使用限制**（ CPU 、内存和PVC），并为 Pod 自动设置默认的资源请求和限制。它可以确保容器不会滥用资源，避免因为缺少配置导致的资源耗尽或过度占用。
+
+支持以下三种类型资源：
+
+1. `cpu`
+
+   pod中定义cpu`1m`表示**1毫核**，`1`表示为**1核（**1核=1000毫核**）**
+
+2. `memeory`
+
+3. `PVC`即`PersistentVolumeClaim`
 
 ### 29.1.0 api文档
 
@@ -9260,8 +9236,6 @@ LimitRange 是限制命名空间内可为每个适用的对象类别 （例如 P
 
 apiserver添加启动参数`--enable-admission-plugins=LimitRange`启用。
 
-当命名空间中存在一个 ResourceQuota 对象时，对于该命名空间而言，资源配额就是开启的。
-
 ```yaml
 apiVersion: v1
 kind: LimitRange
@@ -9277,7 +9251,7 @@ spec:
       cpu: "1"
     min:
       cpu: 100m
-    type: Container
+    type: Container # 应用到的资源类型(可以为Pod或Container或pvc)
 ```
 
 ## 29.2 ResourceQuota资源配额
@@ -9320,24 +9294,26 @@ spec:
 
 ### 29.2.3 使用
 
-apiserver添加启动参数`--enable-admission-plugins=ResourceQuota`启用。
+> scopename看这: https://kubernetes.io/zh-cn/docs/concepts/policy/resource-quotas/#quota-scopes
+
+apiserver添加启动参数`--enable-admission-plugins=ResourceQuota`启用。(**默认启用**)
 
 当命名空间中存在一个 ResourceQuota 对象时，对于该命名空间而言，资源配额就是开启的。
 
 ```yaml
 apiVersion: v1
-kind: List
+kind: ResourceQuotaList
 items:
 - apiVersion: v1
   kind: ResourceQuota
   metadata:
     name: pods-high
   spec:
-    hard:
+    hard: # 资源的硬性限制
       cpu: "1000"
       memory: 200Gi
-      pods: "10"
-    scopeSelector:
+      pods: "10" # 最多pod数量
+    scopeSelector: # 表示范围 如下:只匹配那些PriorityClass为high的pod(还有其他的)
       matchExpressions:
       - operator: In
         scopeName: PriorityClass
@@ -9375,6 +9351,531 @@ items:
 
 
 
+
+# 30. Helm包管理器
+
+helm官网安装指南：https://helm.sh/zh/docs/intro/install/
+
+Helm是kubernetes包管理器，Helm管理名为**chart**的kubernetes包的工具。Helm可以做以下的事情：
+
+1. 从头开始创建新的chart
+2. 将chart打包成归档tgz文件
+3. 与存储chart的仓库进行交互
+4. 在现有的kubernetes集群中安装核卸载char插件
+5. 管理与Helm一起安装的chart的发布周期
+
+## 30.1 Helm架构
+
+对于Helm有三个重要的概念：
+
+1. chart是创建kubernetes应用程序所必需的一组信息。
+2. config包含了可以合并到打包的chart中的配置信息，用于创建一个可发布的对象。
+3. release是一个与特定配置相结合的**chart运行实例**。
+
+### 30.1.1 Helm概念之chart、config和release
+
+### 30.1.2 Helm组件
+
++ **Helm客户端**
+
+  Helm客户端时终端用户的命令行客户端，复制以下内容：
+
+  1. 本地chart开发
+  2. 管理仓库
+  3. 管理发布
+  4. 与Helm库建立接口
+     + 发送安装的chart
+     + 发送、升级或卸载现有发布的请求
+
++ **Helm仓库**
+
+  Helm库提供执行所有Helm仓库的逻辑，与Kubernetes API服务交互并提供以下功能：
+
+  1. 结合chart和配置来构建版本
+  2. 将chart安装到kubernetes中，并提供后续发布对象
+  3. 与kubernetes交互升级或卸载chart
+
+  独立的Helm仓库封装了Helm逻辑以便不同的客户端可以使用它。
+
+## 30.2 安装Helm
+
+helm官网安装指南：https://helm.sh/zh/docs/intro/install/
+
+> 安装前查看：https://helm.sh/zh/docs/topics/version_skew/下载与当前kubernetes版本对应的helm版本
+
++ 脚本安装
+
+  ```bash
+  $ curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+  $ chmod 700 get_helm.sh
+  $ ./get_helm.sh
+  ###或者下面一条命令
+  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  ```
+
++ 包管理器安装
+
+  + homebrew--针对macos
+  + chocolatey--针对windows
+  + scoop--针对windows
+  + winget--针对windows
+  + apt--针对Debian或Ubuntu
+  + dnf/yum 针对fedora
+  + 等等
+
++ **二进制文件安装（推荐）**
+
+  ```bash
+  # 1.查看当前kubernetes版本
+  $kubectl version # 我的k8s是v1.23.17版本（GitVersion）
+  # 2.对照helm版本表选出支持的helm版本  https://helm.sh/zh/docs/topics/version_skew/
+  	我选择helm-3.10.x
+  # 3.访问https://github.com/helm/helm/releases 确定要下载的helm版本 (注意下载链接不在Assets中)
+  	我选择helm-3.10.3
+  # 4.下载helm-3.10.3二进制文件
+  $wget https://get.helm.sh/helm-v3.10.3-linux-amd64.tar.gz #Installation and Upgrading 标题下（Linux amd64）
+  # 5. 解压helm-3.10.3
+  $tar -zxvf helm-v3.10.3-linux-amd64.tar.gz
+  # 6. 拷贝helm到/user/local/bin
+  $sudo cp linux-amd64/helm /usr/local/bin/
+  # 7.验证helm是否成功安装
+  $helm version # version.BuildInfo{Version:"v3.10.3", GitCommit:"835b7334cfe2e5e27870ab3ed4135f136eecc704", GitTreeState:"clean", GoVersion:"go1.18.9"}
+  ```
+
++ 添加需要的仓库(**各种仓库**)
+
+  ```bash
+  # 1. 添加ingress-nginx仓库地址
+  $helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+  # 2.查看现有仓库列表
+  $helm repo list
+  # 3. 搜索ingress-nginx仓库,查看有哪些k8s插件
+  $helm search repo ingress-nginx
+  NAME                       	CHART VERSION	APP VERSION	DESCRIPTION                                       
+  ingress-nginx/ingress-nginx	4.11.3       	1.11.3     	Ingress controller for Kubernetes using NGINX a...
+  ```
+
+## 30.3 Helm常用命令
+
++ `helm repo` 列出、增加、更新、删除chart仓库
++ `helm search` 使用关键词搜索chart
++ `helm pull` 拉取远程仓库中的chart到本地
++ `helm create` 在本地创建新的chart
++ `helm dependency` 管理chart依赖
++ `helm install` 安装chart
++ `helm list` 列出所有release
++ `helm lint` 检查chart配置是否有误
++ `helm package` 打包本地chart
++ `helm rollback` 回滚release到历史版本
++ `helm uninstall/delete` 卸载release
++ `helm upgrade` 升级release
+
+## 30.4 chart目录结构
+
+```bash
+mychart
+├── Chart.yaml # cahrt核心描述文件
+├── charts # 该目录保存其他依赖的chart（子chart）
+├── templates # chart配置模板，用于渲染最终的kubernetes YAML文件
+│   ├── NOTES.txt # 用于运行helm install时的提示信息
+│   ├── _helps.tpl # 用于创建模板时的帮助类
+│   ├── deployment.yaml # k8s中的 deployment 配置
+│   ├── ingress.yaml # k8s中的 ingress 配置
+│   ├── service.yaml # k8s中的 service 配置
+│   ├── serviceaccount.yaml # k8s中的 serviceaccount 配置
+│   ├── tests # 测试套件内容
+│         └── test-connection.yaml
+├── README.md # 说明文件
+└── values.yaml # 定义chart模板中的自定义配置的默认值，可以在
+
+```
+
+## 30.5 基于chart的redis集群构建、升级、回滚、卸载
+
+1. 修改helm源
+
+   ```bash
+   # 查看仓库
+   $ helm repo list
+   # 添加仓库，按需添加
+   $ helm repo add bitnami https://charts.bitnami.com/bitnami # 有点慢但是可用
+   $ helm repo add aliyun https://apphub.aliyuncs.com/stable
+   $ helm repo add azure http://mirror.azure.cn/kubernetes/charts # redis过期舍弃了
+   ```
+
+2. 在repo仓库中搜索redis chart
+
+   ```bash
+   $ helm search repo redis # 也可以使用hub,类似于docker，但是慢 helm search hub redis
+   NAME                           	CHART VERSION	APP VERSION	DESCRIPTION                                       
+   NAME                           	CHART VERSION	APP VERSION	DESCRIPTION                                       
+   azure/prometheus-redis-exporter	3.5.1        	1.3.4      	DEPRECATED Prometheus exporter for Redis metrics  
+   azure/redis                    	10.5.7       	5.0.7      	DEPRECATED Open source, advanced key-value stor...
+   azure/redis-ha                 	4.4.6        	5.0.6      	DEPRECATED - Highly available Kubernetes implem...
+   bitnami/redis                  	20.2.1       	7.4.1      	Redis(R) is an open source, advanced key-value ...
+   bitnami/redis-cluster          	11.0.6       	7.4.1      	Redis(R) is an open source, scalable, distribut...
+   azure/sensu                    	0.2.5        	0.28       	DEPRECATED Sensu monitoring framework backed by...
+   bitnami/keydb                  	0.1.5        	6.3.4      	KeyDB is a high performance fork of Redis with ...
+   ```
+
+3. 查找软件，看看是否匹配当前k8s版本和helm版本
+
+   发现`bitnami/redis`最新版本需要 ，比对我们自己的服务器支持
+
+   - Kubernetes 1.23+
+   - Helm 3.8.0+
+   - PV provisioner support in the underlying infrastructure
+
+   ```bash
+   # 查看指定chart包的readme文件信息(用vscode看)
+   $ helm show readme bitnami/redis > bitnami-redis.md
+   ```
+
+4. 下载redis-chart包，并解压
+
+   ```bash
+   # 1.下载对应chart包
+   $ helm pull bitnami/redis
+   # 2.解压tgz包
+   $ tar -xvf redis-20.2.1.tgz
+   # 3.查看目录结构(详细结构见下面折叠区域)
+   redis
+   ├── charts
+   │   └── common
+   │       └── templates
+   │           └── validations
+   └── templates
+       ├── master
+       ├── replicas
+       └── sentinel
+   # 4.
+   ```
+
+   <details>
+     <summary>redis-的chart包详细结构</summary>
+     <pre><code>
+   redis
+   ├── Chart.lock
+   ├── charts
+   │   └── common
+   │       ├── Chart.yaml
+   │       ├── README.md
+   │       ├── templates
+   │       │   ├── _affinities.tpl
+   │       │   ├── _capabilities.tpl
+   │       │   ├── _compatibility.tpl
+   │       │   ├── _errors.tpl
+   │       │   ├── _images.tpl
+   │       │   ├── _ingress.tpl
+   │       │   ├── _labels.tpl
+   │       │   ├── _names.tpl
+   │       │   ├── _resources.tpl
+   │       │   ├── _secrets.tpl
+   │       │   ├── _storage.tpl
+   │       │   ├── _tplvalues.tpl
+   │       │   ├── _utils.tpl
+   │       │   ├── validations
+   │       │   │   ├── _cassandra.tpl
+   │       │   │   ├── _mariadb.tpl
+   │       │   │   ├── _mongodb.tpl
+   │       │   │   ├── _mysql.tpl
+   │       │   │   ├── _postgresql.tpl
+   │       │   │   ├── _redis.tpl
+   │       │   │   └── _validations.tpl
+   │       │   └── _warnings.tpl
+   │       └── values.yaml
+   ├── Chart.yaml
+   ├── README.md
+   ├── templates
+   │   ├── configmap.yaml
+   │   ├── extra-list.yaml
+   │   ├── headless-svc.yaml
+   │   ├── health-configmap.yaml
+   │   ├── _helpers.tpl
+   │   ├── master
+   │   │   ├── application.yaml
+   │   │   ├── pdb.yaml
+   │   │   ├── psp.yaml
+   │   │   ├── pvc.yaml
+   │   │   ├── serviceaccount.yaml
+   │   │   └── service.yaml
+   │   ├── metrics-svc.yaml
+   │   ├── networkpolicy.yaml
+   │   ├── NOTES.txt
+   │   ├── podmonitor.yaml
+   │   ├── prometheusrule.yaml
+   │   ├── replicas
+   │   │   ├── application.yaml
+   │   │   ├── hpa.yaml
+   │   │   ├── pdb.yaml
+   │   │   ├── serviceaccount.yaml
+   │   │   └── service.yaml
+   │   ├── rolebinding.yaml
+   │   ├── role.yaml
+   │   ├── scripts-configmap.yaml
+   │   ├── secret-svcbind.yaml
+   │   ├── secret.yaml
+   │   ├── sentinel
+   │   │   ├── hpa.yaml
+   │   │   ├── node-services.yaml
+   │   │   ├── pdb.yaml
+   │   │   ├── ports-configmap.yaml
+   │   │   ├── service.yaml
+   │   │   └── statefulset.yaml
+   │   ├── serviceaccount.yaml
+   │   ├── servicemonitor.yaml
+   │   └── tls-secret.yaml
+   ├── values.schema.json
+   └── values.yaml  </code></pre>
+   </details>
+
+5. 修改chart配置文件`values.yaml`
+
+   其实就是配置redis属性和k8s中的相关资源
+
+   1. 是否配置全局镜像仓库，密钥等
+   2. 是否配置全局的StorageClass，为了动态制备PV（redis要持久化啊）
+   3. 是否配置redis密码，redis集群结构*`standalone` or `replication`*
+   4. 配置redis在k8s中信息：pod容器，端口开放，PV，PVC容量(及读写模式)，ServiceAccount，rbac，tls证书等等
+   5. ...（具体配置自己去看）
+
+   **此处我修改全局镜像仓库、存储类（用于动态制备PV）和master主,replicas从,sentinal哨兵使用PVC的容量**
+
+   ```yaml
+   global:
+     imageRegistry: "dockerpull.com"
+     storageClass: "managed-nfs-storage" # 确保存在，且制备器provisioner存在
+   master:
+     persistence:
+       size: 100Mi
+   replicas:
+     persistence:
+       size: 100Mi
+   sentinel:
+     persistence:
+       size: 100Mi
+   ```
+
+6. 安装
+
+   ```bash
+   # redis-t表示chart运行的实例名，即release名
+   $ helm install redis-t ./redis  -n redis # ./redis表示values.yaml所在的文件夹 -n指定K8s的命名空间
+   NAME: redis-t #release名即chart运行的名字
+   LAST DEPLOYED: Fri Oct 25 16:30:21 2024
+   NAMESPACE: redis
+   STATUS: deployed
+   REVISION: 1
+   TEST SUITE: None # 各种信息
+   NOTES:
+   CHART NAME: redis
+   CHART VERSION: 20.2.1
+   APP VERSION: 7.4.1
+   
+   ** Please be patient while the chart is being deployed **
+   
+   Redis&reg; can be accessed on the following DNS names from within your cluster:
+   
+       redis-t-master.redis.svc.cluster.local for read/write operations (port 6379) # 主服务 svc域名 读写模式 端口
+       redis-t-replicas.redis.svc.cluster.local for read-only operations (port 6379) # 从服务 svc域名 读写模式 端口
+   ```
+
+   安装很快又反馈，但是实际上耗时的在pod下载镜像
+
+   ![image-20241025163447646](./_media/image-20241025163447646.png)
+
+7. 查看安装情况
+
+   ```bash
+   $ kubectl get all -n redis # all获取集群内所有资源(一主三从)
+   NAME                     READY   STATUS    RESTARTS   AGE
+   pod/redis-t-master-0     1/1     Running   0          5m
+   pod/redis-t-replicas-0   1/1     Running   0          5m
+   pod/redis-t-replicas-1   1/1     Running   0          4m8s
+   pod/redis-t-replicas-2   1/1     Running   0          3m41s
+   
+   NAME                       TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE
+   service/redis-t-headless   ClusterIP   None             <none>        6379/TCP   5m1s
+   service/redis-t-master     ClusterIP   10.110.155.242   <none>        6379/TCP   5m1s
+   service/redis-t-replicas   ClusterIP   10.105.93.88     <none>        6379/TCP   5m1s
+   
+   NAME                                READY   AGE
+   statefulset.apps/redis-t-master     1/1     5m1s
+   statefulset.apps/redis-t-replicas   3/3     5m1s
+   
+   $ kubectl get pv,pvc -n redis # pv是集群级别资源，PVC是namesapce级别资源需要指定命名空间
+   NAME                                                        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                                  STORAGECLASS          REASON   AGE
+   persistentvolume/pvc-082e0fa1-f4bf-4202-9bc3-b455af227b88   100Mi      RWO            Retain           Bound    redis/redis-data-redis-t-replicas-0    managed-nfs-storage            7m5s
+   persistentvolume/pvc-21e011f5-7adb-404c-a9c6-6a0db4a70c51   100Mi      RWO            Retain           Bound    redis/redis-data-redis-t-master-0      managed-nfs-storage            7m5s
+   persistentvolume/pvc-69f60b79-8772-48e2-833d-ed99ac700cfd   100Mi      RWO            Retain           Bound    redis/redis-data-redis-t-replicas-2    managed-nfs-storage            5m46s
+   persistentvolume/pvc-c2e51530-80d1-483a-a9f6-b225d64c4be7   500Mi      RWO            Retain           Bound    default/nginx-sc-test-pvc-nginx-sc-0   managed-nfs-storage            22m
+   persistentvolume/pvc-c5ff02fa-5e0a-46d1-9ee5-2ab186995432   100Mi      RWO            Retain           Bound    redis/redis-data-redis-t-replicas-1    managed-nfs-storage            6m13s
+   
+   NAME                                                  STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS          AGE
+   persistentvolumeclaim/redis-data-redis-t-master-0     Bound    pvc-21e011f5-7adb-404c-a9c6-6a0db4a70c51   100Mi      RWO            managed-nfs-storage   7m6s
+   persistentvolumeclaim/redis-data-redis-t-replicas-0   Bound    pvc-082e0fa1-f4bf-4202-9bc3-b455af227b88   100Mi      RWO            managed-nfs-storage   7m6s
+   persistentvolumeclaim/redis-data-redis-t-replicas-1   Bound    pvc-c5ff02fa-5e0a-46d1-9ee5-2ab186995432   100Mi      RWO            managed-nfs-storage   6m13s
+   persistentvolumeclaim/redis-data-redis-t-replicas-2   Bound    pvc-69f60b79-8772-48e2-833d-ed99ac700cfd   100Mi      RWO            managed-nfs-storage   5m46s
+   # 动态制备了pv
+   ```
+
+8. 测试
+
+   > 新版本redis会自动开启密码验证，如果helm安装redis不设置密码，默认会自己设置。
+
+   ```bash
+   # 1.登录master节点
+   $ kubectl exec -it pod/redis-t-master-0 -n redis -- bash
+   I have no name!@redis-t-master-0:/$ redis-cli 
+   127.0.0.1:6379> get *
+   (error) NOAUTH Authentication required. # 提示未认证
+   127.0.0.1:6379> auth vYA4NoRh29 # 密码获取见下面
+   OK
+   127.0.0.1:6379> get *
+   (nil)
+   127.0.0.1:6379> set name redis
+   OK
+   127.0.0.1:6379> get name
+   "redis"
+   # 2.进入从节点,尝试读写
+   $ kubectl exec -it redis-t-replicas-0 -n redis -- bash
+   I have no name!@redis-t-replicas-0:/$ redis-cli 
+   127.0.0.1:6379> get name
+   (error) NOAUTH Authentication required.
+   127.0.0.1:6379> auth vYA4NoRh29
+   OK
+   127.0.0.1:6379> get name
+   "redis"
+   127.0.0.1:6379> set hello redis
+   (error) READONLY You cant write against a read only replica. #只能读不能写
+   ```
+
+   **获取redis默认密码：**
+
+   1. 查看redis主节点的yaml文件`kubectl get pod redis-t-master-0 -n redis -o yaml`
+
+      ```yaml
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        ...
+      spec:
+        ...
+        containers:
+        - args:
+          - -c
+          - /opt/bitnami/scripts/start-scripts/start-master.sh
+          command:
+          - /bin/bash
+          env:
+          - name: BITNAMI_DEBUG
+            value: "false"
+          - name: REDIS_REPLICATION_MODE
+            value: master
+          - name: ALLOW_EMPTY_PASSWORD
+            value: "no"
+          - name: REDIS_PASSWORD # 查到redis密码保存在secret中，secret名子为redis-t
+            valueFrom:
+              secretKeyRef:
+                key: redis-password
+                name: redis-t
+          - name: REDIS_TLS_ENABLED
+            value: "no"
+      ```
+
+   2. 从`redis`命名空间下名字叫`redis-t`的secret中找到key`redis-password`，并对输出进行bae64解码。最后输出的就是redis密码
+
+      ```bash
+      kubectl get secret redis-t -n redis -o jsonpath='{.data.redis-password}'|base64 --decode # base64解码
+      ```
+
+9. **helm升级**
+
+   > **helm升级不仅仅指服务版本等信息，你也可以修改在k8s中资源的配置如Pod内容，这也算升级**
+
+   + **升级尝试1：修改密码(失败)**
+
+     这是因为我们刚开始没指定密码**则密码依赖于k8s中的secret，后面我们更新密码时，helm不会自动替换secret中内容。(不改pod容器的启动参数)**
+
+     ```yaml
+     # 1. 修改redis的chart文件 修改了values.yaml的配置文件中redis密码
+     
+     # 2. 开始升级（redis-t表示指定升级的release名即运行的chart）
+     $ helm upgrade redis-t ./redis -n redis #  ./redis为values.yaml所在的目录
+     		# 反馈信息和部署的几乎一样
+     # 3.查看pod状态，发现没变化
+     # 4.随便进入一个pod
+     # 5.发现还是原来的密码，新密码失败
+     ```
+
+   + **升级尝试1：修改master端口(成功)**
+
+     ```bash
+     # 1. 修改redis的chart文件 修改了values.yaml的配置文件中master机器的端口
+     
+     # 2. 开始升级（redis-t表示指定升级的release名即运行的chart）
+     $ helm upgrade redis-t ./redis -n redis #  ./redis为values.yaml所在的目录
+     		# 反馈信息和部署的几乎一样
+     # 3.查看pod状态，发现有变化（全部删除重建，按照sts的顺序：序号高的先删除）
+     # 4.进入master节点的容器 发现端口变为6380
+     $ kubectl exec -it redis-t-master-0 -n redis -- bash
+     I have no name!@redis-t-master-0:/$ redis-cli
+     Could not connect to Redis at 127.0.0.1:6379: Connection refused
+     not connected> exit
+     I have no name!@redis-t-master-0:/$ redis-cli -p 6380
+     127.0.0.1:6380> auth vYA4NoRh29
+     OK
+     127.0.0.1:6380> get name
+     "redis"
+     127.0.0.1:6380> set hello redis-2
+     OK
+     127.0.0.1:6380> exit
+     # 5. 发现从节点全部报错，提示
+     Could not connect to Redis at redis-t-master-0.redis-t-headless.redis.svc.cluster.local:6379: No address associated with hostname
+     或
+     Could not connect to Redis at redis-t-master-0.redis-t-headless.redis.svc.cluster.local:6380: No address associated with hostname
+     # 这是因为改了master的端口，并没有改配置headless服务的端口 (属于意料之中的错误)
+     # 第一个错误是 pod redis-t-replicas-0和redis-t-replicas-1报错的，因为master更新了，他俩没更新还是原来的
+     # 第一个错误是 pod redis-t-replicas-2 它刚更新，但是连不上master 6380
+     ```
+
+10. **helm回滚**
+
+    ```bash
+    # 1. 查看指定release即chart实例的历史版本
+    $ helm history redis-t -n redis # redis-t是release
+    REVISION	UPDATED                 	STATUS    	CHART       	APP VERSION	DESCRIPTION     
+    1       	Fri Oct 25 16:30:21 2024	superseded	redis-20.2.1	7.4.1      	Install complete
+    2       	Fri Oct 25 17:26:45 2024	superseded	redis-20.2.1	7.4.1      	Upgrade complete
+    # 2.回滚到指定版本（和k8s的步骤一样）
+    $ helm rollback redis-t 1 -n redis # redis-t是release
+    Rollback was a success! Happy Helming!
+    # 3.查看pod （如果有的pod重试最大次数了，最好将原来的pod全部删除）
+    删除 3个从节点
+    # 4. 进入master节点，发现端口变为6379数据没丢失，且更新失败的数据 hello也存在
+    等待一会，其余三个pod 从服务全部更新完成
+    # 5. 进入三个pod 从服务节点，成功连接master端口且数据没丢失， hello也存在
+
+11. helm卸载redis
+
+    > 注意PV和PVC不会删除，和k8s中删除Pod的一样，k8s删除pod也不会删除PV和PVC。
+
+    ```bash
+    # 1.列出所有的chart运行服务即release
+    $ helm list -A
+    # 2.卸载其中一个如redis
+    $ helm delete redis-t -n redis # 等价于helm uninstall redis-t -n redis
+    release "redis-t" uninstalled
+    # 3. 查看k8s中 redis命名空间下资源 (发现都删除,除了PVC和PV)
+    No resources found in redis namespace.
+    # 4. 查看PV和PVC，redis的还存在
+    kubectl get pv,pvc -n redis
+    # 5.删除PVC（PV是否删除取决于存储类StorageClass的默认规则） 
+    kubectl delete  persistentvolumeclaim/redis-data-redis-t-master-0 persistentvolumeclaim/redis-data-redis-t-replicas-0 persistentvolumeclaim/redis-data-redis-t-replicas-1 persistentvolumeclaim/redis-data-redis-t-replicas-2 -n redis
+    # 6.根据需要删除PV（PV是否还存在取决于存储类StorageClass的默认规则） 
+    ```
+
+    
 
 # k8s调试模式
 
