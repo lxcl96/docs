@@ -9877,6 +9877,365 @@ mychart
 
     
 
+# 31. k8s集群监控
+
+## 31.1 监控方案
+
++ **Heapster**
+
+  官网地址：https://github.com/kubernetes-retired/heapster
+
+  Heapster是容器集群监控和性能分析工具,天然的支持kubernetes和CoreOS。
+
+  Kubernetes有个出名的监控agent---cAdvisor。在每个kubernetes Node上都会运行cAdvisor，他会收集本机以及容器的监控数据(cpu,memory,filesystem,network,uptime)。在较新的版本中，k8s已经将cAdvicsor功能集成到kubelet组件中，每个Node节点可以直接进行web访问。
+
++ **Weave Scope**
+
+  官网：https://github.com/weaveworks/weave
+
+  Weave Scope可以监控kubernetes集群中的一系列资源的状态、资源使用情况、应用拓扑、scale、还可以直接通过浏览器进入容器内部调试等，其提供的功能包括：
+
+  + 交互式拓扑界面
+  + 图像模式和表格模式
+  + 过滤功能
+  + 搜索功能
+  + 实时度量
+  + 容器排错
+  + 插件扩展
+
++ **Prometheus**
+
+  官网：https://github.com/prometheus/prometheus
+
+  k8s专用版官网：https://github.com/prometheus-operator/kube-prometheus
+
+  Prometheus是一套开源的监控系统、报警、时间序列的集合。最初由SoundCloud开发，后来随着越来越多公司的使用，于是便独立成开源项目。自此以后，许多公司和组织都采用了Prometheus作为监控告警工具。
+
+## 31.2 prometheus介绍
+
+官网：https://prometheus.io/docs/introduction/overview/
+
+Prometheus 的主要特点是： 
+
+- 一个多维 [数据模型 ](https://prometheus.io/docs/concepts/data_model/)，其中包含由指标名称和键/值对标识的时间序列数据 
+- PromQL，一种 [灵活的查询语言 ](https://prometheus.io/docs/prometheus/latest/querying/basics/) 利用此维度 
+- 不依赖分布式存储;单个服务器节点是自主的 
+- 时间序列收集是通过 HTTP 上的拉取模型进行的 
+- [推送时间序列 ](https://prometheus.io/docs/instrumenting/pushing/) 支持通过中间网关 
+- 通过服务发现或静态配置发现目标 
+- 多种绘图和仪表板模式支持 
+
+### 指标
+
+指标是外行术语中的数字测量。术语 时间序列 是指随时间变化的记录。用户想要测量的内容因应用程序而异。对于 Web 服务器，它可以是请求时间;对于数据库，它可以是活动连接数或活动查询数，依此类推。 
+
+指标在理解应用程序为何以某种方式工作方面发挥着重要作用。假设您正在运行一个 Web  应用程序，并发现它很慢。要了解您的应用程序发生了什么，您将需要一些信息。例如，当请求数较高时，应用程序可能会变慢。如果您有请求计数指标，则可以确定原因并增加服务器数量以处理负载。 
+
+### 组件
+
+Prometheus 生态系统由多个组件组成，其中许多组件是 自选： 
+
+- 主要的、核心的  [Prometheus 服务器 ](https://github.com/prometheus/prometheus)，用于抓取和存储时间序列数据 
+- [客户端库 ](https://prometheus.io/docs/instrumenting/clientlibs/) 用于检测应用程序代码的 
+-   [推送网关 ](https://github.com/prometheus/pushgateway) 用于支持短期作业的 
+- 特殊用途的服务 [导出器 ](https://prometheus.io/docs/instrumenting/exporters/) 如HAProxy、StatsD、Graphite 等
+- 用于  [ AlertManager ](https://github.com/prometheus/alertmanager) 处理警报的 
+- 各种支持工具 
+
+### 架构图
+
+Prometheus 直接从检测作业中或通过 用于短期作业的 intermediary push gateway。它存储所有刮取的样本 本地，并对此数据运行规则以聚合和记录新时间 系列或生成警报。 [Grafana ](https://grafana.com/) 或 其他 API 使用者可用于可视化收集的数据。
+
+![image-20241026110639579](./_media/image-20241026110639579.png)
+
+![image-20241026105949044](./_media/image-20241026105949044.png)
+
+
+
+
+
+
+
+### 什么时候适合？ 
+
+Prometheus 非常适合记录任何纯数字时间序列。它适合 既可以进行以机器为中心的监测，也可以监测高度动态的 面向服务的架构。在微服务的世界中，它对 多维数据收集和查询是一个特别的优势。 
+
+Prometheus 专为可靠性而设计，旨在成为您首选的系统 在中断期间，以便您快速诊断问题。每个 Prometheus 服务器是独立的，不依赖于网络存储或其他远程服务。 当基础设施的其他部分出现故障时，您可以依赖它，并且 您无需设置广泛的基础设施即可使用它。 
+
+### 什么时候不合适？ 
+
+Prometheus 重视可靠性。您始终可以查看统计数据 可用于您的系统，即使在故障情况下也是如此。如果您需要 100% 准确性，例如对于按请求计费，Prometheus 不是一个好的选择，因为 收集的数据可能不够详细和完整。在这样的 如果您最好使用其他系统来收集和分析 data 进行计费，Prometheus 进行其余监控。 
+
+## 31.3 搭建prometheus
+
+### 31.3.1 自定义配置文件安装(留着以后去挑战)
+
+```bash
+prometheus
+├── blackbox-exporter.yml
+├── grafana-service.yml
+├── grafana-statefulset.yml
+├── kube-monitoring.yml
+├── prometheus-config.yml # prometheus的配置文件，里面由prometheus.yml
+├── prometheus-daemonset.yml
+├── prometheus-deployment.yml # 部署prometheus的
+├── prometheus-rbac-setup.yaml # 给prometheus分配权限
+└── prometheus-service.yml
+```
+
+自己手动一个一个写配置文件，对权限的详细配置：
+
+1. 创建ConfigMap配置
+2. 部署Prometheus
+3. 配置访问权限
+4. 服务发现配置
+5. 系统时间同步
+6. 监控K8s集群
+   + 从kubelet获取节点容器资源使用情况
+   + Exporter监控资源使用情况
+   + 对Ingress和Serice进行网络探测
+7. Grafana可视化
+   + 基本概念
+     + 数据源（Data Source）
+     + 仪表盘（Dashboard）
+     + 组织和用户
+   + 集成Grafana
+     + 部署Grafana
+     + 服务发现
+     + 配置Grafana面板
+8. service无法访问问题
+
+### 31.3.2 kube-prometheus安装
+
+官方仓库：https://github.com/prometheus-operator/kube-prometheus
+
+官方网址：https://prometheus-operator.dev/docs/getting-started/installation/#install-using-kube-prometheus
+
+1. 打开kube-prometheus官方仓库，根据自己的kubernetes版本选择对应kube-prometheus
+
+   ```bash
+   $ kubectl version # 我的版本是1.23，我就选择0.11了
+   ```
+
+2. 在k8s集群中的机器上下载对应版本，并解压
+
+   ```bash
+   # 1.下载v0.11的配置文件
+   $ wget https://github.com/prometheus-operator/kube-prometheus/archive/refs/tags/v0.11.0.tar.gz
+   # 2.解压
+   $ tar -zxvf v0.11.0.tar.gz
+   ```
+
+3. 确定配置文件的位置（**README.md有说明**）
+
+   就在`kube-prometheus-0.11.0/manifest`中
+
+4. 修改里面的镜像信息，加速
+
+   **推荐使用vscode**
+
+   ```bash
+   # 将所有文件中镜像地址代替为192.168.31.79:5000
+   sed -i 's#image: quay.io/#image: 192.168.31.79:5000/#g' $(ls|grep -v 'setup')
+   sed -i 's#image: k8s.gcr.io/#image: 192.168.31.79:5000/#g' $(ls|grep -v 'setup')
+   sed -i 's#image: jimmidyson/#image: 192.168.31.79:5000/jimmidyson/#g' $(ls|grep -v 'setup')
+   sed -i 's#image: grafana/#image: 192.168.31.79:5000/grafana/#g' $(ls|grep -v 'setup')
+   ```
+
+5. 应用配置文件,创建prometheus
+
+   ```bash
+   # 1.先执行manifests/setup下文件
+   $ kubectl apply -f manifests/setup # 直接使用一个文件夹
+   # 如果报错了 Too long: must have at most 262144 bytes 使用crate
+   $ kubectl delete -f manifests/setup --ignore-not-found
+   $ kubectl create -f manifests/setup # 不能加--save-config,不然一样,就是annotation太长了
+   # 官方推荐的  
+   kubectl apply --server-side -f manifests/setup
+   
+   # 2.等待自定义的k8s资源 servicemonitors 创建成功
+   $ until kubectl get servicemonitors --all-namespaces ; do date; sleep 1; echo ""; done
+   
+   # 3.应用manifests下文件
+   $ kubectl apply -f manifests
+   ```
+
+6. 查看prometheus相关资源，等待所有Pod服务启动(**命名空间为monitoring**)
+
+   **master主服务推荐：4GB内存**
+
+   ```bash
+   $ kubectl get all -n monitoring
+   NAME                                       READY   STATUS    RESTARTS       AGE
+   pod/alertmanager-main-0                    2/2     Running   0              116m
+   pod/alertmanager-main-1                    2/2     Running   4 (101m ago)   116m
+   pod/alertmanager-main-2                    2/2     Running   0              116m
+   pod/blackbox-exporter-7876549967-s9wgz     3/3     Running   0              116m
+   pod/grafana-794864c5ff-2sbk6               1/1     Running   0              116m
+   pod/kube-state-metrics-696f686887-wzfxj    3/3     Running   0              116m
+   pod/node-exporter-f7g5c                    2/2     Running   0              116m
+   pod/node-exporter-ndcqf                    2/2     Running   0              116m
+   pod/node-exporter-nwrxq                    2/2     Running   3 (101m ago)   116m
+   pod/prometheus-adapter-597b4d6949-mpfnn    1/1     Running   0              116m
+   pod/prometheus-adapter-597b4d6949-sv5pv    1/1     Running   0              116m
+   pod/prometheus-k8s-0                       2/2     Running   0              116m
+   pod/prometheus-k8s-1                       2/2     Running   4 (101m ago)   116m
+   pod/prometheus-operator-55c5f84c64-vwtql   2/2     Running   0              116m
+   
+   NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+   service/alertmanager-main       ClusterIP   10.109.27.190   <none>        9093/TCP,8080/TCP            116m
+   service/alertmanager-operated   ClusterIP   None            <none>        9093/TCP,9094/TCP,9094/UDP   116m
+   service/blackbox-exporter       ClusterIP   10.101.241.48   <none>        9115/TCP,19115/TCP           116m
+   service/grafana                 ClusterIP   10.98.9.87      <none>        3000/TCP                     116m
+   service/kube-state-metrics      ClusterIP   None            <none>        8443/TCP,9443/TCP            116m
+   service/node-exporter           ClusterIP   None            <none>        9100/TCP                     116m
+   service/prometheus-adapter      ClusterIP   10.109.186.22   <none>        443/TCP                      116m
+   service/prometheus-k8s          ClusterIP   10.97.253.83    <none>        9090/TCP,8080/TCP            116m
+   service/prometheus-operated     ClusterIP   None            <none>        9090/TCP                     116m
+   service/prometheus-operator     ClusterIP   None            <none>        8443/TCP                     116m
+   
+   NAME                           DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+   daemonset.apps/node-exporter   3         3         3       3            3           kubernetes.io/os=linux   116m
+   
+   NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/blackbox-exporter     1/1     1            1           116m
+   deployment.apps/grafana               1/1     1            1           116m
+   deployment.apps/kube-state-metrics    1/1     1            1           116m
+   deployment.apps/prometheus-adapter    2/2     2            2           116m
+   deployment.apps/prometheus-operator   1/1     1            1           116m
+   
+   NAME                                             DESIRED   CURRENT   READY   AGE
+   replicaset.apps/blackbox-exporter-7876549967     1         1         1       116m
+   replicaset.apps/grafana-794864c5ff               1         1         1       116m
+   replicaset.apps/kube-state-metrics-696f686887    1         1         1       116m
+   replicaset.apps/prometheus-adapter-597b4d6949    2         2         2       116m
+   replicaset.apps/prometheus-operator-55c5f84c64   1         1         1       116m
+   
+   NAME                                 READY   AGE
+   statefulset.apps/alertmanager-main   3/3     116m
+   statefulset.apps/prometheus-k8s      2/2     116m
+
+7. 尝试访问服务（**集群内外机器以及大部分Pod容器内默认都无法访问，需要搭配ingress**）
+
+   + prometheus服务`9090`端口(**见上面svc**)：无法访问
+   + grafana服务`3000`端口(**见上面svc**)：无法访问
+   + alertmanager`9093`端口(**见上面svc**)：无法访问
+
+   ***原因就是：这三个服务定义了***`NetworkPolicy`***策略：***
+
+   以`prometheus-k8s`（prometheus主服务）的`prometheus-networkPolicy.yaml`为例：
+
+   ```yaml
+   # NetWorkPolicy官方参考api文档  https://kubernetes.io/zh-cn/docs/reference/kubernetes-api/policy-resources/network-policy-v1/
+   apiVersion: networking.k8s.io/v1
+   kind: NetworkPolicy # 类似于防火墙
+   metadata:
+     labels:
+       app.kubernetes.io/component: prometheus
+       app.kubernetes.io/instance: k8s
+       app.kubernetes.io/name: prometheus
+       app.kubernetes.io/part-of: kube-prometheus
+       app.kubernetes.io/version: 2.36.1
+     name: prometheus-k8s
+     namespace: monitoring # 默认只允许自己命名空间内，符合规则出入（除非下面配置了namespaceSelector）
+   spec:
+     egress: # 为空，表示拒绝所有出站流量
+     - {}
+     ingress: # 入栈规则
+     - from: # 规则1：只允许当前namespace（因为没配置namesapceSelector）下符合podSelector的可以访问9090和8080端口
+       - podSelector:
+           matchLabels:
+             app.kubernetes.io/name: prometheus
+       ports:
+       - port: 9090
+         protocol: TCP
+       - port: 8080
+         protocol: TCP
+     - from: # 规则2：只允许当前namespace（因为没配置namesapceSelector）下符合podSelector的可以访问9090端口
+       - podSelector:
+           matchLabels:
+             app.kubernetes.io/name: grafana
+       ports:
+       - port: 9090
+         protocol: TCP
+     podSelector: # 表示对当前命名空间monitoring下哪些pod生效
+       matchLabels:
+         app.kubernetes.io/component: prometheus
+         app.kubernetes.io/instance: k8s
+         app.kubernetes.io/name: prometheus
+         app.kubernetes.io/part-of: kube-prometheus
+     policyTypes: # 流量策略
+     - Egress # 配置流量出口（Egress）
+     - Ingress # 配置流量入口（Ingress）
+   ```
+
+   > 一些旧版本中上面三个服务在service中显示的都是`NodepPort`类型，但是在集群外（还是Node节点上，非Pod容器中）还是无法访问，**此时也需要配置ingress服务**
+
+8. 解决外部无法访问三大服务
+
+   + **方法1：官网方法使用端口转发(临时转发,仅用于调试目的)**
+
+     地址：https://prometheus-operator.dev/kube-prometheus/kube/access-ui/
+
+     ```bash
+     # 在哪里执行就是绑定哪个机器的127.0.0.1,还不能用当前的机器的ip如192.168.136.151:9090进行访问.所以仅用于测试
+     kubectl --namespace monitoring port-forward svc/prometheus-k8s 9090
+     kubectl --namespace monitoring port-forward svc/grafana 3000
+     kubectl --namespace monitoring port-forward svc/alertmanager-main 9093
+     ```
+
+   + **方法2：配置ingress，配置域名（没有的话就随便写到时候改测试机器的hosts）**
+
+     1. 创建ingress`kube-prometheus-ingress.yaml`
+
+        ```yaml
+        # https://kubernetes.io/docs/concepts/services-networking/ingress/
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: prometheus-ingress
+          namespace: monitoring
+        spec:
+          ingressClassName: "nginx"
+          rules:
+          - host: prometheus.foo.com
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: prometheus-k8s
+                    port:
+                      number: 9090
+          - host: grafana.foo.com
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: grafana
+                    port:
+                      number: 3000
+          - host: alertmanager.foo.com
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: alertmanager-main
+                    port:
+                      number: 9093
+        ```
+
+     2. 修改三大服务的NetworkPolicy文件,准许ingress-nginx访问这三大服务端口
+
+     
+
+9. 
+
 # k8s调试模式
 
 + --v=6
