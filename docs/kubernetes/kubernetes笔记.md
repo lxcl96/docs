@@ -10051,7 +10051,7 @@ prometheus
    $ kubectl delete -f manifests/setup --ignore-not-found
    $ kubectl create -f manifests/setup # 不能加--save-config,不然一样,就是annotation太长了
    # 官方推荐的  
-   kubectl apply --server-side -f manifests/setup
+   $ kubectl apply --server-side -f manifests/setup
    
    # 2.等待自定义的k8s资源 servicemonitors 创建成功
    $ until kubectl get servicemonitors --all-namespaces ; do date; sleep 1; echo ""; done
@@ -10195,6 +10195,11 @@ prometheus
         metadata:
           name: prometheus-ingress
           namespace: monitoring
+          annotations:
+            nginx.ingress.kubernetes.io/proxy-connect-timeout: "10" #注意是纯数字字符串，10s, 10m都不能生效
+            # nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+            # nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+            # nginx.ingress.kubernetes.io/proxy-next-upstream: "120"
         spec:
           ingressClassName: "nginx"
           rules:
@@ -10232,9 +10237,71 @@ prometheus
 
      2. 修改三大服务的NetworkPolicy文件,准许ingress-nginx访问这三大服务端口
 
-     
+        + `prometheus-networkPolicy.yaml`
+        + `grafana-networkPolicy.yaml`
+        + `alertmanager-networkPolicy.yaml`
 
-9. 
+        ```yaml
+        #　三个配置文件都增加以下配置
+        spec:
+          ingress:
+          - from:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: ingress-nginx
+        ```
+
+     3. 测试
+
+        > [!Warning]
+        >
+        > **不知道为什么,ingress-nginx命名空间下其他pod都可以通过集群ip:port访问prometheus-k8s-0/1,而ingress-nginx-controller只能访问prometheus-k8s-0,无法访问prometheus-k8s-1.这也就导致了在集群外通过ingress-nginx访问就会出现 有时访问立刻出现，有时访问等待10s后才会出现内容（因为负载均衡是轮询的方式，总有一次到prometheus-k8s-1，等待10秒后失败重试到另一个节点prometheus-k8s-0）。**10s是因为ingress中配置连接最大等待时间是10，默认失败重试3次。
+        >
+        > When I try it in  namespace`ingress-nginx `  pod `busybox `,**it works correctly**(I tried each step many times).
+        >
+        > ```bash
+        > $ kubectl exec -it busybox -n ingress-nginx -- sh
+        > / \# wget 10.244.169.150:9090/targets --spider # pod prometheus-k8s-0 in node k8s-node2
+        > Connecting to 10.244.169.150:9090 (10.244.169.150:9090)
+        > / \# wget  10.244.36.75:9090/targets --spider # pod prometheus-k8s-1 in node k8s-node1
+        > Connecting to 10.244.36.75:9090 (10.244.36.75:9090)
+        > / \# wget prometheus-k8s.monitoring:9090/targets --spider
+        > Connecting to prometheus-k8s.monitoring:9090 (10.105.170.59:9090)
+        > ```
+        >
+        > But when I try it in  namespace`ingress-nginx `  pod `ingress-nginx-controller`,**It also behaves differently**(I tried each step many times).
+        >
+        > ```bash
+        > $ kubectl exec -it ingress-nginx-controller-pntw2 -n ingress-nginx -- sh
+        > /etc/nginx $ wget 10.244.169.150:9090/targets --spider # pod prometheus-k8s-0 in node k8s-node2
+        > Connecting to 10.244.169.150:9090 (10.244.169.150:9090)
+        > remote file exists
+        > /etc/nginx $ wget  10.244.36.75:9090/targets --spider  # pod prometheus-k8s-1 in node k8s-node1
+        > Connecting to 10.244.36.75:9090 (10.244.36.75:9090)
+        > wget: can\'t connect to remote host (10.244.36.75): Operation timed out  # error
+        > /etc/nginx $ wget prometheus-k8s.monitoring:9090/targets --spider
+        > Connecting to prometheus-k8s.monitoring:9090 (10.105.170.59:9090)
+        > remote file exists
+        > ```
+        >
+        > Here is request log for `ingress-nginx-controller` and postman request:
+        >
+        > ```bash
+        > 2024/10/28 09:41:11 [error] 26\#26: *58827 upstream timed out (110: Operation timed out) while connecting to upstream, client: 192.168.136.1, server: prometheus.foo.com, request: "GET /targets HTTP/1.1", upstream: "http://10.244.36.75:9090/targets", host: "prometheus.foo.com"
+        > 192.168.136.1 - - [28/Oct/2024:09:41:11 +0000] "GET /targets HTTP/1.1" 200 714 "-" "PostmanRuntime/7.42.0" 184 10.001 [monitoring-prometheus-k8s-9090] [] 10.244.36.75:9090, 10.244.169.150:9090 0, 714 10.000, 0.001 504, 200 5d5940766a0ac16fcce8808647e6c667
+        > ```
+        >
+        > ![image-20241028174254244](./_media/image-20241028174254244.png)
+
+   + **方法3：删除三大服务的NetworkPolicy文件(推荐,方便)**
+
+   
+
+9. 访问
+
+   + prometheus.foo.com
+   + grafana.foo.com
+   + alertmanager.foo.com
 
 # k8s调试模式
 
