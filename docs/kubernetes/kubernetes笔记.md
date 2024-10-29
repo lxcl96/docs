@@ -10303,6 +10303,557 @@ prometheus
    + grafana.foo.com
    + alertmanager.foo.com
 
+# 32. ELK日志管理
+
+
+
+## 32.1 组件介绍
+
+**ELK即elasticsearch，logstash，kibana**
+
++ **ElasticSearch**:  专门负责日志数据存储和实时检索
+
+  Elasticsearch是Elastic Stack核心的分布式搜索和分析引擎，是一个基于Lucene、分布式、通过**Restful方式**进行交互的近实时搜索平台框架。Elasticsearch为所有类型的数据提供**近乎实时的搜索和分析**。无论您是结构化文本还是非结构化文本，数字数据或地理空间数据，Elasticsearch都能以支持快速搜索的方式有效地对其进行存储和索引。
+
++ **Logstash**: 负责数据采集和清洗
+
+  使用Java语言编写，负责数据的收集和清洗，比较笨重但功能较齐全。	
+
+  Logstash是免费且开放的服务器端数据处理管道，能够从多个来源采集数据，转换数据，然后将数据发送到您最喜欢的“存储库”中。Logstash能够动态地采集、转换和传输数据，不受格式或复杂度的影响。利用Grok从非结构化数据中派生出结构，从IP地址解码出地理坐标，匿名化或排除敏感字段，并简化整体处理过程。
+
++ **Kibana**: 负责数据展示
+
+  负责数据展示，具有检索和图表展示功能。
+
+  Kibana是一个针对Elasticsearch的开源分析及可视化平台，用来搜索、查看交互存储在Elasticsearch索引中的数据。使用Kibana，可以通过各种图表进行高级数据分析及展示。并且可以为 Logstash 和 ElasticSearch 提供的日志分析友好的 Web  界面，可以汇总、分析和搜索重要数据日志。还可以让海量数据更容易理解。它操作简单，基于浏览器的用户界面可以快速创建仪表板（dashboard）实时显示Elasticsearch查询动态
+
++ **Filebeat**: 负责数据采集
+
+  使用go语言编写的轻量级日志收集服务，专门负责日志的收集
+
+  Filebeat是用于转发和集中日志数据的轻量级传送工具。Filebeat监视您指定的日志文件或位置，收集日志事件，并将它们转发到Elasticsearch或  Logstash进行索引。Filebeat的工作方式如下：启动Filebeat时，它将启动一个或多个输入，这些输入将在为日志数据指定的位置中查找。对于Filebeat所找到的每个日志，Filebeat都会启动收集器。每个收集器都读取单个日志以获取新内容，并将新日志数据发送到libbeat，libbeat将聚集事件，并将聚集的数据发送到为Filebeat配置的输出。
+
++ **Kafaka/Redis**: 
+
+  如果Node节点上Filebeat采集的日志数据量过大，Logstash无法马上消费掉，那么此时就需要借助消息队列Kafaka，也可以使用redis等。
+
+## 32.2 完整日志系统基本特征
+
+- 收集：能够采集多种来源的日志数据
+- 传输：能够稳定的把日志数据解析过滤并传输到存储系统
+- 存储：存储日志数据
+- 分析：支持 UI 分析
+- 警告：能够提供错误报告，监控机制
+
+## 32.3 k8s中日志收集流程
+
+1. 由于我们使用的容器引擎为dockers，而每个Node节点上docker容器日志默认保存路径为：`/var/log/containers`
+2. **在集群中部署一套（或多套）ELK日志收集服务**
+3. 在每个Node集群上都运行一个**daemonset**用来运行**FIlebeat**服务，进行日志采集
+4. **Filebeat**服务将收集到的日志传输到**Logstash**进行存储和清洗，如果消息太多等可以采用**Kafaka**消息队列进行缓冲(或redis)
+5. **Logstash**将清洗后数据存储到Elastcsearch中，它会将数据划分为不同的索引（Indexes），并分布式地存储在各个节点的磁盘上。
+6. **Kibana**通过Elasticsearch 提供的Restful API检索数据，并进行展示、分析
+7. 我们通过**Kibana**可视化界面访问
+
+![image-20241029105713737](./_media/image-20241029105713737.png)
+
+## 32.4 k8s中日志收集系统架构图
+
+![image-20241029103832471](./_media/image-20241029103832471.png)
+
+## 32.5 部署ELK日志管理服务
+
+***这四个组件的版本最好一致***
+
+### 32.5.0 准备工作
+
+1. 准备命名空间`kube-logging`
+
+   ```yaml
+   apiVersion: v1
+   kind: Namespace
+   metadata:
+     labels:
+       kubernetes.io/metadata.name: kube-logging
+     name: kube-logging
+   ```
+
+2. 给k8s-master节点打上标签
+
+   ```bash
+   $ kubectl label no k8s-master elk="true"
+   ```
+
+3. 
+
+### 32.5.1 部署ElasticSearch服务
+
+配置文件如下:
+
+```yaml
+# https://kubernetes.io/docs/concepts/services-networking/service/
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-logging
+  namespace: kube-logging
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/name: "Elasticsearch"
+spec:
+  selector:
+    k8s-app: elasticsearch-logging
+  type: ClusterIP
+  ports:
+  - name: elasticsearch
+    protocol: TCP
+    port: 9200
+    targetPort: db # 可以是端口或者名字
+---
+# RBAC auth and authz
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elasticsearch-logging
+  namespace: kube-logging
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: elasticsearch-logging
+  # namespace: kube-logging # clusterrole 不是命名空间级资源，不要指定ns
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["services","namespaces","endpoints"]
+  verbs: ["get"]
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: elasticsearch-logging
+  # namespace: kube-logging # cluterrolebinding 也是集群级别的资源，不要指定ns
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+subjects:
+- kind: ServiceAccount
+  name: elasticsearch-logging # Name is case sensitive
+  namespace: kube-logging # 只有serviceaccount需要指定命名空间
+  apiGroup: "" # 留空表示核心组 rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: elasticsearch-logging
+  apiGroup: ""
+---
+# ES itself
+# https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-logging
+  namespace: kube-logging
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    srv: srv-elasticsearch
+spec:
+  selector:
+    matchLabels:
+      k8s-app: elasticsearch-logging
+  serviceName: "elasticsearch-logging" # sts必须要有服务
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: elasticsearch-logging
+        kubernetes.io/cluster-service: "true"
+    spec:
+      serviceAccountName: elasticsearch-logging
+      containers:
+      - name: elasticsearch-logging
+        image: 192.168.31.79:5000/library/elasticsearch:7.9.3
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        ports:
+        - containerPort: 9200
+          name: db
+          protocol: TCP
+        - containerPort: 9300
+          name: transport
+          protocol: TCP
+        volumeMounts:
+        - name: elasticsearch-logging
+          mountPath: /usr/share/elasticsearch/data/
+        env:
+        - name: "NAMESPACE"
+          valueFrom:
+            fieldRef: # 使用内置的元数据
+              fieldPath: metadata.namespace
+        - name: "discovery.type"
+          value: "single-node"
+        - name: ES_JAVA_OPTS
+          value: "-Xms200m -Xmx2g"
+      volumes:
+      - name: elasticsearch-logging
+        hostPath: 
+          path: /data/elasticsearch/
+      nodeSelector:
+        elk: "true"
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      # Elasticsearch需要vm.max_map_count最少为262144，如果你的操作系统以及达到可以不要这个初始化容器
+      initContainers:
+      - name: elasticsearch-logging-init
+        image: 192.168.31.79:5000/alpine:latest
+        command: ["/sbin/sysctl","-w","vm.max_map_count=262144"] # 添加vmmap计数限制，太低可能造成内存不足的错误
+        securityContext:
+          privileged: true # 给容器进程本机root权限,提权
+      - name: increase-fd-ulimit
+        image: 192.168.31.79:5000/busybox:1.28.4
+        imagePullPolicy: IfNotPresent
+        command: ["sh","-c","ulimit -n 65536"] # 修改文件描述符的最大数量
+        securityContext:
+          privileged: true
+      - name: elasticsearch-volume-init
+        image: 192.168.31.79:5000/alpine:latest
+        command: ["chmod","-R","777","/usr/share/elasticsearch/data/"] 
+        volumeMounts:
+        - name: elasticsearch-logging
+          mountPath: /usr/share/elasticsearch/data/
+---
+```
+
+### 32.5.2 部署Logstash服务
+
++ `logstash.yml`配置文件参考：https://www.elastic.co/guide/en/logstash/7.9/logstash-settings-file.html
++ `logstash.conf`配置文件参考：https://www.elastic.co/guide/en/logstash/current/config-setting-files.html#pipeline-config-files
+
+配置文件如下:
+
+```yaml
+# https://kubernetes.io/docs/concepts/services-networking/service/
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: kube-logging
+spec:
+  selector:
+    type: logstash
+  type: ClusterIP
+  clusterIP: None # 无头服务
+  ports:
+  - name: filebeat-port #接收来自filebeat的数据
+    protocol: TCP
+    port: 5044
+    targetPort: beats
+---
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: kube-logging
+spec:
+  selector:
+    matchLabels:
+      type: logstash
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        type: logstash
+        srv: srv-logstash
+    spec:
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      nodeSelector:
+        elk: "true"
+      containers:
+      - name: logstash
+        image: 192.168.31.79:5000/kubeimages/logstash:7.9.3
+        command: ["logstash","-f","/etc/logstash_c/logstash.conf"]
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 1Gi
+            memory: 1000Mi
+        env:
+        - name: XPACK_MONITORING_ELASTICSEARCH_HOSTS
+          value: "http://elasticsearch-logging.kube-logging:9200" #service.namespace
+        ports:
+        - containerPort: 5044
+          name: beats
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/etc/logstash_c/"
+        - name: config-yml-volume
+          mountPath: "/usr/share/logstash/config/"
+        - name: timezone
+          mountPath: "/etc/localtime"
+      volumes:
+        - name: timezone
+          hostPath:
+            path: "/etc/localtime"
+        - name: config-volume
+          configMap:
+            name: logstash-conf
+            items:
+            - key: logstash.conf
+              path: logstash.conf
+        - name: config-yml-volume
+          configMap:
+            name: logstash-yml
+            items:
+            - key: logstash.yml
+              path: logstash.yml
+      restartPolicy: Always
+---
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: logstash-conf
+  namespace: kube-logging
+  labels:
+    type: logstash
+data:
+  logstash.conf: |
+    # 定义输入，即数据来源（Filebeat）
+    input {
+        beats {
+            port => 5044
+        }
+    }
+    # 过滤器，处理需要的数据
+    filter {
+        # 处理ingress日志
+        if [kubernetes][container][name] == "nginx-ingress-controller" {
+            # json是过滤器插件  将json格式的消息解析为logstash字段（变量）
+            json {
+                source => "message"
+                target => "ingress_log"
+            }
+            if [ingress_log][requesttime] {
+                mutate {
+                    convert => ["[ingress_log][requesttime]", "float"]
+                }
+            }
+            if [ingress_log][upstreamtime] {
+                # mutate是过滤器插件
+                mutate {
+                    # 将字段（变量）转换为指定类型
+                    convert => ["[ingress_log][upstreamtime]", "float"]
+                }
+            }
+            if [ingress_log][status] {
+                mutate {
+                    convert => ["[ingress_log][status]", "float"]
+                }
+            }
+            if [ingress_log][httphost] and [ingress_log][uri] {
+                mutate {
+                    # 增加新字段（变量） [ingress_log][entry]
+                    add_field => {
+                        "[ingress_log][entry]" => "%{[ingress_log][httphost]}%{[ingress_log][uri]}"
+                    }
+                }
+                mutate {
+                    # 将字段（变量）分割，分隔符为 / ，并复制给自身[ingress_log][entry]
+                    split => ["[ingress_log][entry]", "/"]
+                }
+                if [ingress_log][entry][1] {
+                    mutate {
+                        add_field => {
+                            "[ingress_log][entrypoint]" => "%{[ingress_log][entry][0]}/%{[ingress_log][entry][1]}"
+                        }
+                        remove_field => "[ingress_log][entry]"
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[ingress_log][entrypoint]" => "%{[ingress_log][entry][0]}/"
+                        }
+                        remove_field => "[ingress_log][entry]"
+                    }
+                }
+            }
+        }
+        # 处理以srv开头的业务服务日志
+        if [kubernetes][container][name] =~ /^srv*/ {
+            json {
+                source => "message"
+                target => "tmp"
+            }
+            if [kubernetes][namespace] == "kube-logging" {
+                # 丢弃
+                drop {}
+            }
+            if [tmp][level] {
+                mutate {
+                    add_field => {
+                        "[applog][level]" => "%{[tmp][level]}"
+                    }
+                }
+                if [applog][level] == "debug" {
+                    drop {}
+                }
+            }
+            if [tmp][msg] {
+                mutate {
+                    add_field => {
+                        "[applog][msg]" => "%{[tmp][msg]}"
+                    }
+                }
+            }
+            if [tmp][func] {
+                mutate {
+                    add_field => {
+                        "[applog][func]" => "%{[tmp][func]}"
+                    }
+                }
+            }
+            if [tmp][cost] {
+                if "ms" in [tmp][cost] {
+                    mutate {
+                        split => ["[tmp][cost]","m"]
+                        add_field => {
+                            "[applog][cost]" => "%{[tmp][cost][0]}"
+                        }
+                        convert => ["[applog][cost]","float"]
+                    }
+                } else {
+                    mutate {
+                        add_field => {
+                            "[applog][cost]" => "%{[tmp][cost]}"
+                        }
+                    }
+                }
+            }
+            if [tmp][method] {
+                mutate {
+                    add_field => {
+                        "[applog][method]" => "%{[tmp][method]}"
+                    }
+                }
+            }
+            if [tmp][request_url] {
+                mutate {
+                    add_field => {
+                        "[applog][request_url]" => "%{[tmp][request_url]}"
+                    }
+                }
+            }
+            if [tmp][meta._id] {
+                mutate {
+                    add_field => {
+                        "[applog][traceId]" => "%{[tmp][meta._id]}"
+                    }
+                }
+            }
+
+            if [tmp][project] {
+                mutate {
+                    add_field => {
+                        "[applog][project]" => "%{[tmp][project]}"
+                    }
+                }
+            }
+            if [tmp][time] {
+                mutate {
+                    add_field => {
+                        "[applog][time]" => "%{[tmp][time]}"
+                    }
+                }
+            }
+            if [tmp][status] {
+                mutate {
+                    add_field => {
+                        "[applog][status]" => "%{[tmp][status]}"
+                    }
+                    convert => ["[applog][status]", "float"]
+                }
+            }
+        }
+        mutate {
+            # 字段重命名
+            rename => ["kubernetes","k8s"]
+            # 删除add_field新增的临时字段
+            remove_field => "beat"
+            remove_field => "tmp"
+            remove_field => "[k8s][labels][app]"
+        }
+    }
+    # 定义输出，即数据存储（Elasticsearch）
+    output {
+        elasticsearch {
+            # elasticsearch服务地址
+            hosts => ["http://elasticsearch-logging.kube-logging:9200"]
+            # 数据存储形式
+            codec => json
+            # 索引名称以logstash+日志进行每日新建
+            index => "logstash-%{+YYYY.MM.dd}" 
+        }
+        # 调试 可以去掉
+        stdout {
+            codec => rubydebug
+        }
+    }
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: logstash-yml
+  namespace: kube-logging
+  labels:
+    type: logstash
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    xpack.monitoring.elasticsearch.hosts: "http://elasticsearch-logging.kube-logging:9200"
+```
+
+### 32.5.3 部署Filebeat服务
+
+配置文件如下:
+
+
+
+### 32.5.4 部署Kibana服务
+
+配置文件如下:
+
+
+
+### 32.5.6 Kibana配置
+
+
+
 # k8s调试模式
 
 + --v=6
