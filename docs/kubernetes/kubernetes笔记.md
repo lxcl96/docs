@@ -10483,14 +10483,14 @@ spec:
         k8s-app: elasticsearch-logging
         kubernetes.io/cluster-service: "true"
     spec:
-      serviceAccountName: elasticsearch-logging
+      serviceAccountName: elasticsearch-logging # serviceaccount不是service
       containers:
       - name: elasticsearch-logging
         image: 192.168.31.79:5000/library/elasticsearch:7.9.3
         resources:
           limits:
-            cpu: 1000m
-            memory: 2Gi
+            cpu: 800m
+            memory: 800Mi
           requests:
             cpu: 100m
             memory: 200Mi
@@ -10586,11 +10586,11 @@ spec:
         type: logstash
         srv: srv-logstash
     spec:
-      tolerations:
-      - effect: NoSchedule
-        operator: Exists
-      nodeSelector:
-        elk: "true"
+    #   tolerations:
+    #   - effect: NoSchedule
+    #     operator: Exists
+    #   nodeSelector:
+    #     elk: "true"
       containers:
       - name: logstash
         image: 192.168.31.79:5000/kubeimages/logstash:7.9.3
@@ -10601,8 +10601,8 @@ spec:
             cpu: 100m
             memory: 100Mi
           limits:
-            cpu: 1Gi
-            memory: 1000Mi
+            cpu: 800m
+            memory: 800Mi
         env:
         - name: XPACK_MONITORING_ELASTICSEARCH_HOSTS
           value: "http://elasticsearch-logging.kube-logging:9200" #service.namespace
@@ -10819,10 +10819,10 @@ data:
             # 索引名称以logstash+日志进行每日新建
             index => "logstash-%{+YYYY.MM.dd}" 
         }
-        # 调试 可以去掉
-        stdout {
-            codec => rubydebug
-        }
+        # 调试 一定要注释，否则logstash会疯狂向es中存储数据，导致高cpu，高内存，高存储占用
+        #stdout {
+        #    codec => rubydebug
+        #}
     }
 ---
 kind: ConfigMap
@@ -10842,17 +10842,570 @@ data:
 
 配置文件如下:
 
-
+```yaml
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: filebeat-config
+  namespace: kube-logging
+  labels:
+    k8s-app: filebeat
+data:
+  # 定义filebeat采集数据配置
+  filebeat.yml: |
+    filebeat.inputs:
+    - type: container
+      enable: true
+      paths:
+      # 这里是filebeat采集挂载到pod的日志目录
+      - /var/log/containers/*.log
+      processors:
+      # 添加k8s的字段用于后续的数据清洗
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+          matchers:
+          - logs_path:
+              logs_path: /var/log/containers/
+    # 如果日志量较大，logstash处理日志有延迟，可以在filebeat和logstash中存添加kafka服务
+    # output.kafka:
+    #   hosts: ["kafaka-log-01:9002","kafaka-log-02:9002","kafaka-log-03:9002"]
+    #   topic: "topic-test-log"
+    #   version: 2.0.0
+    # 直接对接 logstash
+    output.logstash:
+      hosts: ["logstash.kube-logging:5044"]
+      enabled: true
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: filebeat
+  namespace: kube-logging
+  labels:
+    k8s-app: filebeat
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: filebeat
+  labels:
+    k8s-app: filebeat
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["pods","namespaces"]
+  verbs: ["get", "watch", "list"]
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: filebeat
+subjects:
+- kind: ServiceAccount
+  name: filebeat # Name is case sensitive
+  namespace: kube-logging
+  apiGroup: "" # 注意api组对应
+roleRef:
+  kind: ClusterRole
+  name: filebeat
+  apiGroup: "" # 注意api组对应
+---
+# https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat
+  namespace: kube-logging
+  labels:
+    k8s-app: filebeat
+spec:
+  selector:
+    matchLabels:
+      k8s-app: filebeat
+  template:
+    metadata:
+      labels:
+        k8s-app: filebeat
+    spec:
+      serviceAccountName: filebeat # serviceAccount账户,不是service
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      containers:
+      - name: filebeat
+        image: 192.168.31.79:5000/kubeimages/filebeat:7.9.3
+        args: ["-c","/etc/filebeat.yml","-e","-httpprof","0.0.0.0:6060"]
+        # ports:
+        # - containerPort: 6060
+        #   name: filebeat-port
+        #   protocol: TCP
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: ELASTICSEARCH_HOST
+          value: "elasticsearch-logging.kube-logging"
+        - name: ELASTICSEARCH_PORT
+          value: "9200"
+        securityContext:
+          runAsUser: 0
+          # privileged: true # red hat OpenShift开启
+        resources:
+          limits:
+            memory: 500Mi
+            cpu: 500m
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - name: timezone
+          mountPath: /etc/localtime
+        # 挂载filebeat的配置文件
+        - name: config
+          mountPath: /etc/filebeat.yml
+          readOnly: true
+          subPath: filebeat.yml
+        # 将filebeat持久化到宿主机上
+        - name: data
+          mountPath: /usr/share/filebeat/data
+        # docker引擎默认日志
+        - name: varlibdockercontainers
+          mountPath: /var/lib
+          readOnly: true
+        # 将宿主机上/var/log/pods和/var/log/containers的软连接挂载到filebear容器中
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        # 测试inputs是否存在文件(原本没有用到inputs)
+        # - name: inputs
+        #   mountPath: /data/test-inputs/
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: config
+        configMap: 
+          defaultMode: 0600
+          name: filebeat-config
+      - name: varlibdockercontainers # 原生docker日志所在目录(如果改了要调整)
+        hostPath:
+          path: /var/lib
+      - name: varlog # k8s默认对日志的软连接地址(如果改了要调整)
+        hostPath:
+          path: /var/log
+      # - name: inputs
+      #   configMap: 
+      #     defaultMode: 0600
+      #     name: filebeat-inputs  # 不存在该 configmap
+      - name: data
+        hostPath:
+          path: /data/filebeat-data
+          type: DirectoryOrCreate
+      - name: timezone
+        hostPath:
+          path: /etc/localtime
+      
+---
+```
 
 ### 32.5.4 部署Kibana服务
 
 配置文件如下:
 
+```yaml
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: kibana-config
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+data:
+  kibana.yml: |
+    server.name: kibana
+    server.host: "0" # 就是0.0.0.0的意思
+    i18n.locale: zh-CN
+    elasticsearch:
+      hosts: ${ELASTICSEARCH_HOSTS}
+---
+# https://kubernetes.io/docs/concepts/services-networking/service/
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/name: "Kibana"
+    srv: src-kibana
+spec:
+  selector:
+    k8s-app: kibana
+  type: NodePort
+  ports:
+  - name: kibana
+    protocol: TCP
+    port: 5601 # service自身的端口
+    targetPort: ui
+    # nodePort: 30001 # 使用随机端口
+---
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    srv: src-kibana
+spec:
+  selector:
+    matchLabels:
+      k8s-app: kibana
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: kibana
+    spec:
+      #   tolerations:
+      #   - effect: NoSchedule
+      #     operator: Exists
+      #   nodeSelector:
+      #     elk: "true"
+      containers:
+      - name: kibana
+        image: 192.168.31.79:5000/kubeimages/kibana:7.9.3
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 500m
+            memory: 500Mi
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: http://elasticsearch-logging.kube-logging:9200
+        ports:
+        - containerPort: 5601
+          name: ui
+          protocol: TCP
+        volumeMounts:
+        - name: localtime
+          mountPath: /etc/localtime
+        - name: config
+          mountPath: /usr/share/kibana/config/kibana.yml
+          readOnly: true
+          subPath: kibana.yml
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+        - name: config
+          configMap:
+            name: kibana-config
+      restartPolicy: Always
+---
+# https://kubernetes.io/docs/concepts/services-networking/ingress/
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana-ingress
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+spec:
+  ingressClassName: nginx # ****千万不要忘记加上
+  rules:
+  - host: kibana.foo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kibana
+            port:
+              number: 5601 # service自身的端口
+---
 
+```
 
 ### 32.5.6 Kibana配置
 
+```yaml
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: kibana-config
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+data:
+  kibana.yml: |
+    server.name: kibana
+    server.host: "0"
+    i18n.locale: zh-CN
+    elasticsearch:
+      hosts: ${ELASTICSEARCH_HOSTS}
+---
+# https://kubernetes.io/docs/concepts/services-networking/service/
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/name: "Kibana"
+    srv: srv-kibana
+spec:
+  selector:
+    k8s-app: kibana
+  type: NodePort
+  ports:
+  - name: kibana
+    protocol: TCP
+    port: 5601 # service自身的端口
+    targetPort: ui
+    # nodePort: 30001 # 使用随机端口
+---
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+    kubernetes.io/cluster-service: "true"
+    addonmanager.kubernetes.io/mode: Reconcile
+    srv: srv-kibana
+spec:
+  selector:
+    matchLabels:
+      k8s-app: kibana
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: kibana
+    spec:
+      # tolerations:
+      # - effect: NoSchedule
+      #   operator: Exists
+      # nodeSelector:
+      #   elk: "true"
+      containers:
+      - name: kibana
+        image: 192.168.31.79:5000/kubeimages/kibana:7.9.3
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 800m
+            memory: 1000Mi
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: http://elasticsearch-logging.kube-logging:9200
+        ports:
+        - containerPort: 5601
+          name: ui
+          protocol: TCP
+        volumeMounts:
+        - name: localtime
+          mountPath: /etc/localtime
+        - name: config
+          mountPath: /usr/share/kibana/config/kibana.yml
+          readOnly: true
+          subPath: kibana.yml
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+        - name: config
+          configMap:
+            name: kibana-config
+      restartPolicy: Always
+---
+# https://kubernetes.io/docs/concepts/services-networking/ingress/
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana-ingress
+  namespace: kube-logging
+  labels:
+    k8s-app: kibana
+spec:
+  ingressClassName: nginx # ****千万不要忘记加上
+  rules:
+  - host: kibana.foo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kibana
+            port:
+              number: 5601 # service自身的端口
+---
 
+```
+
+### 32.5.7 注意点
+
+**注意1：logstash中debug输出那段配置必须注释掉，否则会导致：高cpu，高memory，高磁盘占用**，具体表现为：
+
+1. kibana虽然在运行状态，但是端口服务未开启，服务无法连接
+
+   ```bash
+   curl 127.0.0.1:5601 # 容器内
+   curl: (7) Failed connect to 127.0.0.1:5061; Connection refused
+   ```
+
+2. pod实例如：logstash频繁的被驱逐`Evicted`，原因时磁盘压力 `DiskPressure`
+
+   ```bash
+   Warning  Evicted    4m47s  kubelet            The node had condition: [DiskPressure].
+
+3. 由于kibana的问题，导致ingress-nginx报错**虽然kibana的service和ep都存在，且有效。但是ingress-nginx就是无法连接**
+
+   ```bash
+   Service "kube-logging/kibana" does not have any active Endpoint.
+   ```
+
+***注意2：容器服务的资源限制resources.limits必须合理***，否则就会出现pod频繁被删掉原因时`OOMkill`
+
+# 33.  kubernetes可视化界面
+
+## 33.1 kubernetes Dashboard
+
+官网部署文档：https://kubernetes.io/zh-cn/docs/tasks/access-application-cluster/web-ui-dashboard/
+
+官方仓库：https://github.com/kubernetes/dashboard
+
+1. 选择适合自己的版本（**确保支持自己的k8s版本,最新版本只能通过helm安装了**）
+
+   我选的是：`v2.7.0` release地址为：https://github.com/kubernetes/dashboard/releases/tag/v2.7.0
+
+2. 进行安装
+
+   ```bash
+   # 1. 下载配置文件
+   wget https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+   # 2. 修改内部镜像地址(自由发挥) 
+   # 3. 应用创建
+   # 4.查看进程都安装成功
+   ```
+
+3. 因为官方默认创建的角色是`kubernetes-dashboard`，权限很低；为了方便查看，我们创建一个`kubernetes-admin`账户
+
+   ```yaml
+   # https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: kubernetes-admin
+     namespace: kubernetes-dashboard
+     labels:
+       k8s-app: kubernetes-dashboard
+   ---
+   # https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRoleBinding
+   metadata:
+     name: kubernetes-admin-cluster-role
+   subjects:
+   - kind: ServiceAccount
+     name: kubernetes-admin # 大小写敏感
+     # apiGroup: ""
+     namespace: kubernetes-dashboard
+   roleRef:
+     kind: ClusterRole
+     name: cluster-admin # 妈蛋写反了，操 主要看这个是关联到的角色名称 (需要删除重新建立)
+     apiGroup: rbac.authorization.k8s.io
+   ---
+   ```
+
+4. 访问地址：https://192.168.136.153:32241，提示我们输入serviceaccount的token，**serviceaccount的token保存在secret中**
+
+   ```bash
+   # 1.先看serviceaccount配置,（如果绑定了role就会有secret） 获取到secret kubernetes-admin-token-4zqct
+   kubectl get sa kubernetes-admin -n kubernetes-dashboard -o yaml
+   # 2.查看 secret kubernetes-admin-token-4zqct配置 （base64加密）
+   kubectl get secrets kubernetes-admin-token-4zqct -n kubernetes-dashboard -oyaml
+   # 3.查看并解码
+   kubectl get secrets kubernetes-admin-token-4zqct -n kubernetes-dashboard -o jsonpath='{.data.token}'|base64 --d
+   ```
+
+5. 将token填入网页
+
+   ![image-20241030185633501](./_media/image-20241030185633501.png)
+
+## 33.2 Kubesphere
+
+官网：https://kubesphere.io
+
+### 33.2.1 安装方式
+
+官网有两种安装方式：
+
++ All-in-One，即同时安装kubernetes和kubesphere[如v3.4 All-inOne安装](https://kubesphere.io/zh/docs/v3.4/quick-start/all-in-one-on-linux/)
++ 最小化安装，即只安装kubesphere和其组件 [如v3.4最小化安装](https://kubesphere.io/zh/docs/v3.4/quick-start/minimal-kubesphere-on-k8s/)
+
+### 33.2.2 准备工作
+
+参考官网要求：https://kubesphere.io/zh/docs/v3.4/installing-on-kubernetes/introduction/prerequisites/
+
++ 如需在 Kubernetes 上安装 KubeSphere 3.4，您的 Kubernetes 版本必须为：v1.20.x、v1.21.x、v1.22.x、v1.23.x、* v1.24.x、* v1.25.x 和 * v1.26.x。带星号的版本可能出现边缘节点部分功能不可用的情况。因此，如需使用边缘节点，推荐安装 v1.23.x。 (**满足**)
+
+  ```bash
+  $ kubectl version
+  Client Version: version.Info{Major:"1", Minor:"23", GitVersion:"v1.23.17", GitCommit:"953be8927218ec8067e1af2641e540238ffd7576", GitTreeState:"clean", BuildDate:"2023-02-22T13:34:27Z", GoVersion:"go1.19.6", Compiler:"gc", Platform:"linux/amd64"}
+  Server Version: version.Info{Major:"1", Minor:"23", GitVersion:"v1.23.17", GitCommit:"953be8927218ec8067e1af2641e540238ffd7576", GitTreeState:"clean", BuildDate:"2023-02-22T13:27:46Z", GoVersion:"go1.19.6", Compiler:"gc", Platform:"linux/amd64"}
+  ```
+
++ 可用 CPU > 1 核；内存 > 2 G。CPU 必须为 x86_64，暂时不支持 Arm 架构的 CPU。（**满足**）
+
++ 可用空闲存储最好大于20GB（**不满足**）
+
++ Kubernetes 集群已配置**默认** StorageClass（请使用 `kubectl get sc` 进行确认）。（**不满足**）
+
++ 使用 `--cluster-signing-cert-file` 和 `--cluster-signing-key-file` 参数启动集群时，kube-apiserver 将启用 CSR 签名功能，请参见 [RKE 安装问题](https://github.com/kubesphere/kubesphere/issues/1925#issuecomment-591698309)。（**未使用 RKE（Rancher Kubernetes Engine）启动 Kubernetes 集群,跳过**）
+
+#### 33.2.2.1 扩展硬盘（lvm）
+
+#### 33.2.2.2 设置默认存储类
+
+### 33.2.3 安装
+
+
+
+## 33.3 Rancher
+
+官网：https://www.rancher.cn/
+
+自己去了解
+
+## 33.4 Kuboard
+
+官网：https://kuboard.cn/
+
+自己去了解
 
 # k8s调试模式
 
