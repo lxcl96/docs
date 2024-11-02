@@ -11389,7 +11389,210 @@ spec:
 
 #### 33.2.2.1 扩展硬盘（lvm）
 
+```bash
+# 1.开始分区硬盘 /dev/sdb
+$ sudo fdisk /dev/sdb
+n
+回车1
+回车2 # 分区数
+回车3
+回车4
+p
+w
+# 2.将该分区(物理卷)转为lvm物理卷
+$ sudo pvcreate /dev/sdb1
+$ sudo pvdisplay #列出所有lvm物理卷
+# 3.扩展卷组vg
+$ sudo vgextend centos /dev/sdb1
+# 4.扩展逻辑卷root即/dev/centos/root 使用当前卷组所有剩余空间
+$ sudo lvextend -l +100%FREE /dev/centos/root
+# 5.扩展文件系统(必须,否则容量不更新) 以xfs文件系统为例子
+$ xfs_growfs / # 注意根 / 不同的文件系统不同的命令
+# 6.验证 
+$ df -h
+```
+
 #### 33.2.2.2 设置默认存储类
+
+**也可以不设置,在配置kubesphere文件中指定,但是太多了最好还是设置**
+
+以教程视频中：openebs为例子
+
+官方仓库：https://github.com/openebs/openebs
+
+1. 安装openebs
+
+```bash
+# 1.添加helm仓库
+$ helm repo add openebs https://openebs.github.io/openebs
+$ helm repo update
+$ helm search repo openebs
+# 2.使用pull而不是install ，为了下载到本地修改镜像文件
+$ helm pull openebs/openebs # 确保最新版兼容当前k8s版本，否则指定参数--version
+# 3.解压.tgz等同于.tar.gz
+$ tar -zxvf openebs-4.1.1.tgz
+# 4.进入openebs，修改镜像地址 只改values.yaml即可 (依赖chart太多,且自己有的用不到,等到pull 失败了才去该DNS劫持到自己的本地仓库)
+# 5. 修改openebs配置文件 values.yaml 修改镜像啊,关闭不需要的组件啊
+
+# 安装
+# 6a.安装所有的支持 具体见上面官网把
+# 6b. 只安装 local PV支持 自己去改 values.yaml 中同第五步
+(不要执行)helm install openebs --debug --namespace openebs  --set engines.replicated.mayastor.enabled=false --create-namespace openebs/
+# 如下
+engines:
+  local:
+    lvm:
+      enabled: true
+    zfs:
+      enabled: true
+  replicated:
+    mayastor:
+      enabled: false
+    
+# 7. 确保配置文件改好了
+helm install openebs --debug --namespace openebs --create-namespace . # 最后的点别忘了 ,表示当前目录
+```
+
+2. 测试opens
+
+   + 查看openebs创建的`StorageClass`,保存到`openebs-sc.yaml`并设置为默认存储类 `kubectl apply -f openebs-sc.yaml`
+
+     > 自己仿照,创建一个新的把.
+
+     https://kubernetes.io/zh-cn/docs/tasks/administer-cluster/change-default-storage-class/
+
+     ```yaml
+     apiVersion: storage.k8s.io/v1
+     kind: StorageClass
+     metadata:
+       annotations:
+         cas.openebs.io/config: |
+           - name: StorageType
+             value: "hostpath"
+           - name: BasePath
+             value: "/var/openebs/local"  # 默认的本地存储
+         meta.helm.sh/release-name: openebs
+         storageclass.kubernetes.io/is-default-class: "true" #设置为默认存储类
+         meta.helm.sh/release-namespace: openebs
+         openebs.io/cas-type: local
+       labels:
+         app.kubernetes.io/managed-by: Helm
+       name: hostpath-default
+     provisioner: openebs.io/local
+     reclaimPolicy: Retain # 修改为Retain 保留
+     volumeBindingMode: WaitForFirstConsumer
+     ```
+
+   + 查看是否存在默认类
+
+     ```bash
+     $ kubectl get sc -A
+     NAME                         PROVISIONER        RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+     hostpath-default (default)   openebs.io/local   Retain          WaitForFirstConsumer   false                  6s
+     # 名字旁边有个  (default)
+     ```
+
+   + 创建deploy和PVC测试能不能用
+
+     ```yaml
+     # https://kubernetes.io/docs/concepts/workloads/pods/
+     # https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+     # https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+     apiVersion: v1
+     kind: PersistentVolumeClaim
+     metadata:
+       name: test-default-pvc
+       namespace: default
+       labels:
+         app: test-default-pvc
+     spec:
+       # storageClassName: default # 注意如果使用默认类则 storageClassName 必须注释掉 啥也别写
+       accessModes:
+       - ReadWriteOnce
+       resources:
+         requests:
+           storage: 100Mi
+     ---
+     apiVersion: apps/v1
+     kind: Deployment
+     metadata:
+       name: test-openebs
+       labels:
+         app: test-openebs
+     spec:
+       selector:
+         matchLabels:
+           app: test-openebs
+       replicas: 1
+       template:
+         metadata:
+           labels:
+             app: test-openebs
+         spec:
+           containers:
+           - name: alpine
+             image: 192.168.31.79/library/alpine:latest
+             command: ["sh","-c","echo 'hello openebs' >/data/hello.openebs;tail -f /dev/null"]
+             resources: {}
+             volumeMounts:
+             - name: config
+               mountPath: /data/
+           volumes:
+             - name: config
+               persistentVolumeClaim:
+                 claimName: test-default-pvc
+     ---
+     ```
+
+   + 验证运行这个Pod的机器上`/var/openebs/local/pv的名字/hello.openebs`是否存在(**验证通过**)
+
+     ```bash
+     # 1.获取运行测试pod的机器 如node1
+     kubectl get pod -o wide 
+     # 2.查看当前测试pod使用的pv名字
+     kubectl getpv,pvc -A 
+     NAME                                                        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                                  STORAGECLASS          REASON   AGE
+     persistentvolume/pvc-0ea0c9ff-0986-4103-9d84-9618f3e5e27c   100Mi      RWO            Retain           Bound    default/test-default-pvc               hostpath-default               29m
+     persistentvolume/pvc-c2e51530-80d1-483a-a9f6-b225d64c4be7   500Mi      RWO            Retain           Bound    default/nginx-sc-test-pvc-nginx-sc-0   managed-nfs-storage            8d
+     
+     NAMESPACE   NAME                                                 STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS          AGE
+     default     persistentvolumeclaim/nginx-sc-test-pvc-nginx-sc-0   Bound    pvc-c2e51530-80d1-483a-a9f6-b225d64c4be7   500Mi      RWO            managed-nfs-storage   8d
+     default     persistentvolumeclaim/test-default-pvc               Bound    pvc-0ea0c9ff-0986-4103-9d84-9618f3e5e27c   100Mi      RWO            hostpath-default      30m
+     # 3.在node1节点上查看你文件是否存在
+     cat /var/openebs/local/pvc-0ea0c9ff-0986-4103-9d84-9618f3e5e27c/hello.openebs
+     hello openebs
+
+#### 33.2.2.3 使用私有库配置
+
+安装部署好harbor,推荐开启ssl (**配置文件为harbor.yaml**)
+
+**使用ssl自签证书命令百度吧。注意CN推荐为域名，后面安装时使用,如我的为:dockerhub.102400000.xyz**
+
+`/etc/docker/daemon.json`中将harbor服务设置为`"insecure-registries":[harbor服务]`
+
+> **注意将harbor私有项目设置为 public**
+
+#### 33.2.2.4 DNS劫持(为了访问本地私有库)
+
+```bash
+# 放在 /etc/hosts 文件中
+192.168.31.79 hub.docker.io
+192.168.31.79 docker.io
+192.168.31.79 registry.k8s.io
+192.168.31.79 quay.io
+192.168.31.79 ghcr.io
+192.168.31.79 k8s.gcr.io
+192.168.31.79 docker.elastic.co
+
+# 放在 /etc/docker/daemon.json 中
+"insecure-registries": ["192.168.31.79:5000","hub.docker.io","docker.io","registry.k8s.io","quay.io","ghcr.io","k8s.gcr.io","docker.elastic.co"
+
+# 重启daocker
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+
 
 ### 33.2.3 安装
 
