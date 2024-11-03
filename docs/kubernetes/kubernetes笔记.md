@@ -11592,9 +11592,51 @@ sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```
 
+### 33.2.3 安装kubesphere
 
+参考文档：https://kubesphere.io/zh/docs/v3.4/quick-start/minimal-kubesphere-on-k8s/#%E9%83%A8%E7%BD%B2-kubesphere
 
-### 33.2.3 安装
+1. 可以提前根据images-list.txt文件下载好对于的镜像（**去github找，最新版只支持helm安装了**）
+
+2. 下载所需的yaml文件 `kubesphere-installer.yaml`和`cluster-configuration.yaml`
+
+   ```bash
+   wget https://github.com/kubesphere/ks-installer/releases/download/v3.4.1/kubesphere-installer.yaml
+   wget https://github.com/kubesphere/ks-installer/releases/download/v3.4.1/cluster-configuration.yaml
+   ```
+
+3. 应用`kubesphere-installer.yaml`和`cluster-configuration.yaml`
+
+   `cluster-configuration.yaml`**中根据需要启动关闭组件如：jenkins、elk等等**，这里就默认了。
+
+   ```bash
+   kubectl apply -f https://github.com/kubesphere/ks-installer/releases/download/v3.4.1/kubesphere-installer.yaml
+   kubectl apply -f https://github.com/kubesphere/ks-installer/releases/download/v3.4.1/cluster-configuration.yaml
+   ```
+
+4. 执行下面命令，等待执行结束（**会出现用户名和密码**）
+
+   ```bash
+   kubectl logs -n kubesphere-system $(kubectl get pod -n kubesphere-system -l 'app in (ks-install, ks-installer)' -o jsonpath='{.items[0].metadata.name}') -f
+   ```
+
+5. 在第三步的同时执行`kubectl get  pod -A`查看pod创建的问题，并解决（一般都是镜像拉取问题）
+
+6. 成功 
+
+   ![image-20241103155353548](./_media/image-20241103155353548.png)
+
+7. 访问 http://192.168.136.151:30880/
+
+   ![image-20241103160944647](./_media/image-20241103160944647.png)
+
+8. 安装后期启用可插拔组件 
+
+   参考文档：https://kubesphere.io/zh/docs/v3.4/quick-start/enable-pluggable-components/#%E5%9C%A8%E5%AE%89%E8%A3%85%E5%90%8E%E5%90%AF%E7%94%A8%E5%8F%AF%E6%8F%92%E6%8B%94%E7%BB%84%E4%BB%B6
+
+### 32.2.4 kubesphere使用
+
+https://kubesphere.io/zh/docs/v3.4/workspace-administration/what-is-workspace/
 
 
 
@@ -11617,3 +11659,4 @@ sudo systemctl restart docker
 
 # **集群级别的资源**
 
+# 34. devops环境搭建
