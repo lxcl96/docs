@@ -11652,6 +11652,428 @@ https://kubesphere.io/zh/docs/v3.4/workspace-administration/what-is-workspace/
 
 自己去了解
 
+# 34. DevOps
+
++ **DevOps：**即Development Operations，指软件开发人员（Dev）和IT运维技术人员（Ops）之间沟通合作的文化。**让开发，测试运维等团队实现一体式流程自动化**。就必然涉及持续集成（CI）和持续部署（CD）。
++ **CI：**即Continuous Integration 持续集成，指**从编码，编译，测试到发布的完整自动化流程**。
++ **CD：**即Continuous Deployment持续部署，指**包含持续集成CI，并且增加将项目部署到对应环境（如开发，测试，生产）的自动化流程**。
+
+## 34.1 传统模式对比DevOps
+
++ 传统方式
+
+  ![image-20241104184348153](./_media/image-20241104184348153.png)
+
++ DevOps方式
+
+  ![image-20241104184331320](./_media/image-20241104184331320.png)
+
+
+
+## 34.2 devops环境搭建
+
+### 34.2.0 PostgreSQl安装
+
+1. docker-compose安装
+
+   ```yaml
+   # Use postgres/example user/password credentials
+   version: '3.9'
+   
+   services:
+     db:
+       image: dockerhub.102400000.xyz/library/postgres:latest
+       restart: always
+       shm_size: 128mb
+       container_name: postgres
+       environment:
+         TZ: Asia/Shanghai
+         POSTGRES_USER: root
+         POSTGRES_PASSWORD: 123456
+       ports:
+         - "5432:5432"
+       volumes:
+         - /etc/localtime:/etc/localtime:ro
+         - /srv/postgresql/data:/var/lib/postgresql/data
+         - /srv/postgresql/config:/etc/postgresql
+         - /srv/postgresql/logs:/var/log/postgresql
+       mem_limit: 2gb
+       cpus: '2'
+   ```
+
+2. 创建表空间目录
+
+   ```bash
+   $ sudo docker compsoe exec -it db bash #db为docker-compose中serivce名
+   \# mkdir /var/lib/postgresql/data/tablespace
+   \# chown postgres:postgres tablespace/ # 必须给目录tablespace给正确的权限
+   ```
+
+3. 创建数据库`gitlabhq_production`,给gitlab使用
+
+   ```postgresql
+   CREATE USER gitlab WITH PASSWORD '123456';
+   
+   CREATE TABLESPACE gitlab_ts LOCATION '/var/lib/postgresql/data/tablespace';
+   
+   CREATE DATABASE gitlabhq_production
+       WITH OWNER = gitlab
+       TEMPLATE = template0
+       ENCODING = 'UTF8'
+       LC_COLLATE = 'en_US.UTF-8'
+       LC_CTYPE = 'en_US.UTF-8'
+       CONNECTION LIMIT = -1
+   	TABLESPACE = gitlab_ts;
+   GRANT ALL PRIVILEGES ON DATABASE gitlabhq_production TO gitlab;
+   ```
+
+### 34.2.1 gitlab安装
+
+官方各种平台安装大全：https://about.gitlab.com/install/#kubernetes-deployments
+
+docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.html
+
+1. 下载需要的镜像 如:`gitlab-ce:latest`
+
+2. 以docker-cpmpose方式安装,编写`docker-compose.yaml`文件
+
+   在官方的yaml基础上修改
+
+   ```yaml
+   version: "3.6"
+   services:
+     gitlab:
+       image: dockerhub.102400000.xyz/gitlab/gitlab-ce:latest
+       container_name: gitlab
+       restart: always
+       hostname: "192.168.31.79"
+       environment:
+         GITLAB_OMNIBUS_CONFIG: |
+           external_url "http://192.168.31.79:8929"
+           gitlab_rails["gitlab_shell_ssh_port"] = 2424
+       ports:
+         - "8929:8929"
+         - "8443:443"
+         - "2424:22"
+       volumes:
+         - /etc/localtime:/etc/localtime:ro
+         - "/srv/gitlab/config:/etc/gitlab" # 这些文件的权限归属千万不要改,否则就无法启动 错误原因授权失败
+         - "/srv/gitlab/logs:/var/log/gitlab"
+         - "/srv/gitlab/data:/var/opt/gitlab"
+       shm_size: "128m"
+       mem_limit: 4gb
+       cpus: '3'
+   ```
+
+3. 在`docker-compose.yaml`文件所在目录执行命令,启动gitlab容器
+
+   ```bash
+   $ sudo docker compose up -d
+   [sudo] password for tom: 
+   WARN[0000] /home/tom/downloads/gitlab/docker-compose.yaml: `version` is obsolete 
+   [+] Running 2/2
+    ✔ Network gitlab_default  Created                                                                                                                                                           0.2s 
+    ✔ Container gitlab        Started  
+   ```
+
+4. 查看容器日志，访问gitlab服务端口（**此过程稍久，因为ruby编译**）
+
+   访问external_url：http://192.168.31.79:8929/ (**会先提示gitlab正在启动，让你等待**)
+
+   ```bash
+   # 1.获取容器名字 gitlab
+   $ sudo docker compose ps
+   # 2.查看容器日志
+   $ sudo docker compose logs -f  # 在docker-compose.yaml所在目录执行
+   ```
+
+   > 这一步需要排查错误日志，如我遇到的redis等服务反复重启，发现是没有权限读取某个文件，就需要在compsoe中添加`privileged: true`
+
+5. gitlab页面打开
+
+   ![image-20241105103634436](./_media/image-20241105103634436.png)
+
+6. 修改配置文件，因为电脑配置差，为了不卡
+
+   两种方法:
+
+   1. 容器外直接修改`/srv/gitlab/config/gitlab.rb`
+   2. 容器内直接修改`/etc/gitlab/gitlab.rb`
+
+   ```
+   # 修改
+   gitlab_rails['time_zone'] = 'Asia/Beijing'
+   puma['worker_processes'] = 2
+   puma['min_threads'] = 1
+   puma['max_threads'] = 3
+   sidekiq['concurrency'] = 8
+   # 取消注释
+   gitlab_rails['db_adapter'] = "postgresql"
+   gitlab_rails['db_encoding'] = "UTF8"
+   gitlab_rails['db_collation'] = "en_US.UTF-8"
+   gitlab_rails['db_database'] = "gitlabhq_production"
+   gitlab_rails['db_username'] = "gitlab"
+   gitlab_rails['db_password'] = "123456"
+   gitlab_rails['db_host'] = "192.168.31.79"
+   gitlab_rails['db_port'] = 5432
+   
+   
+   # 注释
+   postgresql['enable'] = false
+   prometheus['enable'] = false
+   ```
+
+   > 然后进入docker-compose.yaml所在目录，重启容器`sudo docker compose restart`
+
+7. 获取默认账户**root**的默认密码
+
+   ```bash
+   # 1.获取密码所在的文件
+   $ sudo docker compose logs|grep Password
+   [sudo] password for tom: 
+   WARN[0000] /home/tom/downloads/gitlab/docker-compose.yaml: `version` is obsolete 
+   gitlab  | Password: You didn't opt-in to print initial root password to STDOUT.
+   gitlab  | Password stored to /etc/gitlab/initial_root_password. This file will be cleaned up in first reconfigure run after 24 hours.
+   # 获取密码（容器内，当然也可以在容器外的对应文件中）
+   $ sudo docker compose exec -it gitlab grep 'Password:' /etc/gitlab/initial_root_password
+   $ sudo cat /srv/gitlab/config/initial_root_password|grep 'Password:'
+   ```
+
+   > 如果配置了外部postgresql导致出现密码不正确的操作:
+   >
+   > ```ruby
+   > $ sudo docker compose exec -it gitlab bash # docker
+   > root@192:/etc/gitlab# gitlab-rails console -e production # 容器中命令 进入控制台
+   > --------------------------------------------------------------------------------
+   >  Ruby:         ruby 3.2.5 (2024-07-26 revision 31d0f1a2e7) [x86_64-linux]
+   >  GitLab:       17.5.1 (e8dca573167) FOSS
+   >  GitLab Shell: 14.39.0
+   >  PostgreSQL:   16.4
+   > ------------------------------------------------------------[ booted in 46.69s ]
+   > Loading production environment (Rails 7.0.8.4)
+   > irb(main):001:0> user = User.find_by(username: 'root') # 1.找到root用户
+   > => #<User id:1 @root>
+   > irb(main):002:0> user.password = '你的密码' # 2.设置密码
+   > => "你的密码"
+   > irb(main):003:0> user.password_confirmation = "你的密码" # 3.确认密码
+   > => "你的密码"
+   > irb(main):004:0> user.save! # 4.保存密码
+   > => true
+   > irb(main):005:0> exit # 5.退出
+   > ```
+
+8. 输入获取的密码，成功登录
+
+9. 配置界面语言 **偏好设置(Preference)-本地化local-中文**
+
+   1. 左下角管理员-设置-偏好设置-本地化-默认语言（**只针对未登录的用户生效**）
+   2. 左上角当前用户头像-偏好设置-本地化-语言
+
+10. **修改密码，因为原密码文件会在24h小时内删除**
+
+11. 去掉第三方用户头像显示 
+
+    左下角管理员-设置-通用-账户和限制-启用 Gravatar    取消勾选
+
+12. 关闭用户注册
+
+    左下角管理员-设置-通用-注册限制-已启用注册功能    取消勾选
+
+13. **开启webhook访问**
+
+    左下角管理员-设置-网络-出站请求-允许来自 webhooks 和集成对本地网络的请求-允许来自 webhooks 和集成对本地网络的请求   勾选
+
+### 34.2.2 Harbor安装
+
+官网：https://goharbor.io/docs/2.11.0/install-config/download-installer/
+
+官方仓库：https://github.com/goharbor/harbor/releases （选择自己需要的版本）
+
+1. 下载离线安装v2.11.1版本 https://github.com/goharbor/harbor/releases/download/v2.11.1/harbor-offline-installer-v2.11.1.tgz 
+
+   ```bash
+   $ wget https://github.com/goharbor/harbor/releases/download/v2.11.1/harbor-offline-installer-v2.11.1.tgz
+   ```
+
+2. 解压
+
+   ```bash
+   $ tar -zxvf harbor-offline-installer-v2.11.1.tgz # 也可以先校验下MD5的值 看看是否对应https://github.com/goharbor/harbor/releases/download/v2.11.1/md5sum
+   ```
+
+3. 运行安装
+
+   1. `sudo ./install.sh` 一步到位安装，底层就是步骤2
+   2. `sudo dcker compose up -d`启动安装
+
+4. 修改配置文件`harbor.yml`，如账户密码，端口，https访问，存储位置等等
+
+5. 生效
+
+   ```bash
+   # 1.停止服务
+   $ sudo docker compose down -v
+   # 2.一定要先运行prepare 清除旧的配置，生产新的配置
+   sudo ./prepare 
+   # 3.启动服务
+   $ sudo docker compose up -d
+   ```
+
+### 34.2.3 SonarQube安装
+
+#### 34.2.3.1 helm安装
+
++ 要求： https://docs.sonarsource.com/sonarqube/latest/setup-and-upgrade/deploy-on-kubernetes/server/before-you-start/
++ helm安装：https://docs.sonarsource.com/sonarqube/latest/setup-and-upgrade/deploy-on-kubernetes/server/installing-helm-chart/
+
+#### 34.2.3.2 参考官方docker安装方式，迁移到k8s
+
++ docker安装方式要求：https://docs.sonarsource.com/sonarqube/latest/setup-and-upgrade/pre-installation/linux/
++ docker部署指南：https://docs.sonarsource.com/sonarqube/latest/setup-and-upgrade/install-the-server/installing-sonarqube-from-docker/#start-container
+
+1. postgresql创建数据库`sonarqube`
+
+   ```postgresql
+   CREATE USER sonarqube WITH PASSWORD '123456';
+   
+   -- 需要先创建容器目录/var/lib/postgresql/data/ts/sonarqube_ts
+   CREATE TABLESPACE sonarqube_ts LOCATION '/var/lib/postgresql/data/ts/sonarqube_ts';
+   
+   CREATE DATABASE sonarqube
+       WITH OWNER = sonarqube
+       TEMPLATE = template0
+       ENCODING = 'UTF8'
+       LC_COLLATE = 'en_US.UTF-8'
+       LC_CTYPE = 'en_US.UTF-8'
+       CONNECTION LIMIT = -1
+   	TABLESPACE = sonarqube_ts;
+   GRANT ALL PRIVILEGES ON DATABASE sonarqube TO sonarqube;
+   ```
+
+2. 创建k8s配置文件`sonarqube.yaml`
+
+   ```yaml
+   apiVersion: v1
+   kind: Namespace
+   metadata:
+     name: devops-test
+   ---
+   # https://kubernetes.io/docs/concepts/services-networking/service/
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: sonarqube-svc
+     namespace: devops-test
+   spec:
+     selector:
+       app: sonarqube
+       devops: test
+     type: NodePort
+     ports:
+     - name: sonarqube
+       protocol: TCP
+       port: 80
+       targetPort: 9000
+   ---
+   apiVersion: apps/v1
+   kind: StatefulSet
+   metadata:
+     name: sonarqube
+     namespace: devops-test
+   spec:
+     selector:
+       matchLabels:
+         app: sonarqube
+         devops: test
+     serviceName: sonarqube-svc
+     replicas: 1
+     template:
+       metadata:
+         labels:
+           app: sonarqube
+           devops: test
+       spec:
+         terminationGracePeriodSeconds: 10
+         initContainers:
+         - name: busybox
+           image: 192.168.31.79/library/busybox:latest
+           command: ["sh","-c","sysctl -w vm.max_map_count=524288 && sysctl -w fs.file-max=131072 && ulimit -n 131072 && ulimit -u 8192"]
+           securityContext:
+             privileged : true
+         containers:
+         - name: sonarqube
+           image: 192.168.31.79/library/sonarqube:10-community
+           env:
+           - name: SONAR_JDBC_URL
+             value: "jdbc:postgresql://192.168.31.79:5432/sonarqube"
+           - name: SONAR_JDBC_USERNAME
+             value: "sonarqube"
+           - name: SONAR_JDBC_PASSWORD
+             value: "123456"
+           ports:
+           - containerPort: 9000
+             name: sonarqube
+           livenessProbe:
+             httpGet:
+               path: /sessions/new
+               port: 9000
+             initialDelaySeconds: 60
+             periodSeconds: 30
+           readinessProbe:
+             httpGet:
+               path: /sessions/new
+               port: 9000
+             initialDelaySeconds: 60
+             periodSeconds: 30
+             failureThreshold: 6
+           volumeMounts: # 是否支持一个volume被挂载多次？ 仅为ReadWriteMany权限时才可以
+           - name: sonarqube-pvc
+             mountPath: /opt/sonarqube/conf
+           - name: sonarqube-pvc
+             mountPath: /opt/sonarqube/data
+           - name: sonarqube-pvc
+             mountPath: /opt/sonarqube/logs
+   
+         ##### sts中声明了pvc就不需要对pvc以volume的方式声明了 ####
+         # volumes:
+         # - name: data    # 二逼了，应该直接挂载，不需要再声明volume
+         #   persistentVolumeClaim:
+         #     claimName: sonarqube-pvc
+   
+     volumeClaimTemplates:
+     - metadata:
+         name: sonarqube-pvc
+         namespace: devops-test
+         labels:
+           app: sonarqube
+           devops: test
+       spec:
+         storageClassName: managed-nfs-storage # 注释掉使用默认的存储类 (openebs 本地模式不支持ReadWriteMany)
+         accessModes:
+         - ReadWriteMany
+         resources:
+           requests:
+             storage: 10Gi
+   ---
+   ```
+
+3. 查看pod,svc,pvc,pv的状态,并排查
+
+   我遇到的两个问题
+
+   1. 我设置的默认storageclass为openebs hostpath 不支持ReadWriteMany，需要调整
+   2. **sts中声明pvc的同时也被当作volume了，所以你不需要在volume中再次去声明了（因为sts动态生成的名子是变化的，不能写死）**
+
+4. 查看服务。获取nodeport端口 访问 http://192.168.136.151:30165，默认账户`admin/admin`
+
+5. 改密码 `SonarQube1234@`
+
+### 34.2.4 
+
+
+
+### 34.2.x 配置gitlab、harbor的secret
+
 # k8s调试模式
 
 + --v=6
@@ -11659,4 +12081,3 @@ https://kubesphere.io/zh/docs/v3.4/workspace-administration/what-is-workspace/
 
 # **集群级别的资源**
 
-# 34. devops环境搭建
