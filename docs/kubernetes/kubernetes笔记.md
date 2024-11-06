@@ -11974,6 +11974,7 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
        protocol: TCP
        port: 80
        targetPort: 9000
+       nodePort: 30165
    ---
    apiVersion: apps/v1
    kind: StatefulSet
@@ -12068,11 +12069,296 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
 
 5. 改密码 `SonarQube1234@`
 
-### 34.2.4 
+6. **设置中文插件**
+
+   **Administration-->Marketplace-->I understand the risk-->搜索chinese 安装-->重启服务**
+
+### 34.2.4 Jenkins安装
+
+1. 编写docker-compose文件，并创建
+
+   ```yaml
+   services:
+     jenkins:
+       image: 192.168.31.79/jenkins/jenkins:2.479.1-lts
+       container_name: jenkins
+       restart: on-failure
+       user: 1002:1002 # 解决权限问题，前提要求已经给本地映射的文件夹这个uid权限了
+       environment:
+         DOCKER_HOST: tcp://docker:2376
+         DOCKER_CERT_PATH: /certs/client
+         DOCKER_TLS_VERIFY: 1
+       ports:
+         - "8080:8080" # web端口
+         - "50000:50000" # 控制器端口
+       volumes:
+         - /etc/localtime:/etc/localtime:ro
+         - /srv/jenkins/jenkins-data:/var/jenkins_home
+         - /srv/jenkins/jenkins-docker-certs:/certs/client:ro
+       shm_size: "128m"
+       mem_limit: 768mb
+       cpus: '2'
+   ```
+
+2. 查看jenkins日志，获取初始化密码
+
+   ```bash
+   $ sudo docker compose logs -f jenkins
+   ...
+   jenkins  | Jenkins initial setup is required. An admin user has been created and a password generated.
+   jenkins  | Please use the following password to proceed to installation:
+   jenkins  | 
+   jenkins  | f8ad08493e4c43dab7ffe3d38d8ddab8 # 初始化密码
+   jenkins  | 
+   jenkins  | This may also be found at: /var/jenkins_home/secrets/initialAdminPassword # 密码保存路径
+   ```
+
+3. 访问 http://192.168.31.79:8080，输入上面的初始化密码，点击安装推荐的插件，等待安装完成
+
+   ![image-20241106111430364](./_media/image-20241106111430364.png)
+
+4. 创建第一个管理账户，当然也可以跳过（我跳过了）
+
+5. 实例地址配置，确定
+
+   ![image-20241106111651054](./_media/image-20241106111651054.png)
+
+6. 修改密码，重新登录
+
+7. 安装插件，**左边Manage Jenkins-->Plugins-->Available plugins** 
+
+   + `Build Authorization Token Root` 自动生成token
+
+     This plugin provides a pipeline step to trigger a build using the [Build Authorization Token Root](https://plugins.jenkins.io/build-token-root) plugin
+
+   + `gitlab` 
+     This plugin allows [GitLab](http://gitlab.com/) to trigger Jenkins builds and display their results in the GitLab UI.
+
+   + `sonarqube scanner`
+     This plugin allows an easy integration of [SonarQube](http://www.sonarqube.org/), the open source platform for Continuous Inspection of code quality.
+
+   + `Node and Label parameter` 配置节点标签参数
+
+     The node and label parameter plugin allows the node for a job to be selected dynamically.
+
+   + `Kubernetes` 
+
+     This plugin integrates Jenkins with [Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes/)
+
+   + `Maven Integration`
+
+     This plugin provides a deep integration between Jenkins and Maven. It adds support for automatic triggers between projects depending on SNAPSHOTs as well as the automated configuration of various Jenkins publishers such as Junit.
+
+   + `Config File ProviderVersion`
+
+     Ability to provide configuration files (e.g. settings.xml for maven, XML, groovy, custom files,...) loaded through the UI which will be copied to the job workspace.
+
+8. 插件安装完成后，勾选安装界面最下面的**安装完成后重启Jenkins**
+
+### 34.2.5. 服务地址整理
+
++ PostgreSQL [jdbc:postgresql://192.168.31.79:5432]()
++ Gitlab http://192.68.31.79:8929
++ Harbor https://192.68.31.79
++ SonarQube http://192.168.136.151:30165/ (虚拟机-k8s中),映射到 http://192.168.31.80:30165/
++ Jenkins http://192.168.31.79:8080/
++ Kubernetes https://192.168.136.151:6443  (虚拟机-k8s中),映射到 http://192.168.31.80:30164/
+
+> 192.168.31.80机器记得防火墙开放30165 10364端口 (入站)
+
+### 34.2.6 jenkins配置（K8s,harbor,gitlab,sonarqube,）
+
+#### 34.2.6.1 kubernetes中创建service-account，给jenkins使用 
+
+kubernetes中创建service-account，给jenkins使用 并获取sa`jenkins-sa`的token-secret值
+
+```yaml
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-sa
+  namespace: devops-test
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-sa
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["pods", "pods/exec", "secrets", "persistentvolumeclaims"]
+  verbs: ["get", "list", "create", "delete"]
+---
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-sa
+subjects:
+- kind: ServiceAccount
+  name: jenkins-sa
+  namespace: devops-test
+roleRef:
+  kind: ClusterRole
+  name: jenkins-sa
+  apiGroup: rbac.authorization.k8s.io
+---
+```
+
+```bash
+# 获取serviceaccount的token jenkins-sa
+$ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.token}'|base64 --decode
+```
+
+#### 34.2.6.2 SonarQube生成token，给jenkins使用 
+
++ 打开http://192.168.31.80:30165/
+
++ 点击**头像-我的账户-安全-通用令牌**
+
+  ![image-20241106154653219](./_media/image-20241106154653219.png)
+
++ 将生成的令牌拷贝下来
+
+#### 34.2.6.3 gitlab配置个人令牌
+
++ 打开http://192.168.31.79:8929/
+
++ 点击**头像--偏好设置--访问令牌--添加新令牌**
+
+  ![image-20241106210416261](./_media/image-20241106210416261.png)
+
++ 填写信息和权限，保存
+
+#### 34.2.6.4 Jenkins中添加凭据(**SonarQube,Kubernetes**,gitlab)
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理-凭据管理-Stores scoped to Jenkins(选System)-全局凭据(unrestricted)-右上角Add Credentials**
+
++ 填入上一步中sonarqube token
+
+  ![image-20241106155445766](./_media/image-20241106155445766.png)
+
++ 继续创建kubernetes给jenkins使用的serviceaccount`jenkins-sa`密钥
+
+  ![image-20241106164413358](./_media/image-20241106164413358.png)
+
++ 继续创建gitlab给jenkins使用的`jenkins-gitlab`密钥
+
+  ![image-20241106210734914](./_media/image-20241106210734914.png)
+
++ 
+
+#### 34.2.6.5 Jenkins中配置**sonarqube**地址
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理-系统配置-SonarQube servers-Add SonarQube**
+
+  ![image-20241106155724224](./_media/image-20241106155724224.png)
+
++ 点击左下角应用,保存
+
+#### 34.2.6.6 Jenkins中配置**kubernetes**
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理-节点和云管理-左边的Clouds-New cloud**
+
+  + 填入云的名字，并选择为kubernetes类型，点击create
+
+    ![image-20241106160309563](./_media/image-20241106160309563.png)
+
+  + 配置kubernetes机器地址
+
+    1. Jenkins部署在k8s内，k8s地址直接填`https://kubernetes.default`
+
+    2. Jenkins部署在k8s外 
+
+       ![image-20241106164638039](./_media/image-20241106164638039.png)
+
+  + 继续填入jenkins地址， http://192.168.31.79:8080/ ，保存
+
+#### 34.2.6.7 Jenkins中配置gitlab账户信息（**这里使用账户密码，最简单**）
+
++ 打开http://192.168.31.79:8080/
++ 点击左边**系统管理-节点和云管理-左边的Clouds-New cloud**
+
+#### 34.2.6.8 Jenkins中给节点打上标签**maven**，用于后面执行maven构建
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理--系统配置--下滑到gitlab**配置
+
+  ![image-20241106211003154](./_media/image-20241106211003154.png)
+
++ 测试连接成功，保存
+
+#### 34.2.6.9 增加jenkins的win-slave节点用于执行maven命令
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理--节点和云管理--右上角New Node**配置
+
+  ![image-20241106211653536](./_media/image-20241106211653536.png)
+
++ 点击create继续配置
+
+  ![image-20241106211857552](./_media/image-20241106211857552.png)
+
++ 点击保存，发现节点不在线，点击节点名称
+
+  ![image-20241106212015388](./_media/image-20241106212015388.png)
+
++ 下载Jenkins agent包，并运行
+
+  ```cmd
+  # 从jenkins服务器上下载 
+  curl.exe -sO http://192.168.31.79:8080/jnlpJars/agent.jar
+  # 运行agent
+  java -jar agent.jar -url http://192.168.31.79:8080/ -secret 0052b85012016925ac188adf388db1244633fca09d08075f7ac45edf75f543a9 -name "jenkins-win-slave-192.168.31.80" -webSocket -workDir "D:\Code\jenkins"
+  ```
+
+  ![image-20241106212310835](./_media/image-20241106212310835.png)
+
++ 返回上一级，查看节点列表，windows变为在线状态
+
+  ![image-20241106212348550](./_media/image-20241106212348550.png)
+
++ 测试windows-slave是否可用
+
+  **jenkins--新建任务--构建一个自由风格的软件项目--确定**配置
+
+  ![image-20241106213318974](./_media/image-20241106213318974.png)
+
+  ![image-20241106213407762](./_media/image-20241106213407762.png)
+
++ 点击保存，**点击立即构建**，等待构建结束（正确或错误），点进去查看输出详情
+  ![image-20241106213756972](./_media/image-20241106213756972.png)
+
+### 34.2.7 ==修改Jenkins的docker-compose==
+
+**目的:**
+
+1. 持久化存储maven打包后的jar
+2. win-slave上执行maven打包，然后将jar包回传到jenkins
+3. 将`kubectl`和`sonar scanner cli`客户端工具放到jenkins服务器上，为了方便Jenkins和k8s和sonarqube交互
 
 
 
-### 34.2.x 配置gitlab、harbor的secret
+### 34.2.x docker容器挂载volume权限问题
+
+参考地址：https://www.cnblogs.com/yfacesclub/p/14083299.html
+
+使用docker时默认内部是root账户，所以导致创建出映射的卷文件权限为root，**可能会出现权限问题 即Permission denied**。为了解决这个问题，推荐的方法就是运行是**指定用户uid而不是名字**。
+
+如Jenkins使用方法：
+
+1. 先在系统中创建jenkin用户，查看其uid为`1002`
+2. 给映射到本地的文件所有者授权 如`sudo chown -R 1002:root /srv/jenkins`
+3. 命令启动容器时`-u 1002:1002`或者docker-compsoe.yaml中指明`user: 1002:1002`
 
 # k8s调试模式
 
