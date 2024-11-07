@@ -12034,6 +12034,8 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
              mountPath: /opt/sonarqube/data
            - name: sonarqube-pvc
              mountPath: /opt/sonarqube/logs
+           - name: sonarqube-pvc
+             mountPath: /opt/sonarqube/extensions # 保存插件，比如中文插件。否则会丢失
    
          ##### sts中声明了pvc就不需要对pvc以volume的方式声明了 ####
          # volumes:
@@ -12152,6 +12154,10 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
    + `Config File ProviderVersion`
 
      Ability to provide configuration files (e.g. settings.xml for maven, XML, groovy, custom files,...) loaded through the UI which will be copied to the job workspace.
+     
+   + `Git Parameter`
+
+     Adds ability to choose branches, tags or revisions from git repositories configured in project.
 
 8. 插件安装完成后，勾选安装界面最下面的**安装完成后重启Jenkins**
 
@@ -12167,6 +12173,13 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
 > 192.168.31.80机器记得防火墙开放30165 10364端口 (入站)
 
 ### 34.2.6 jenkins配置（K8s,harbor,gitlab,sonarqube,）
+
+> [!Note]
+>
+> 1. k8s-sa账户为了让Jenkins有创建pod的权限
+> 2. harbor账户让Jenkins能将镜像推送到harbor
+> 3. gitlab账户能让Jenkins从gitlab上拉取源码
+> 4. sonarqube账户能让Jenkins调用分析
 
 #### 34.2.6.1 kubernetes中创建service-account，给jenkins使用 
 
@@ -12221,7 +12234,7 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 + 将生成的令牌拷贝下来
 
-#### 34.2.6.3 gitlab配置个人令牌
+#### 34.2.6.3 gitlab创建个人令牌给Jenkins拉取源码使用
 
 + 打开http://192.168.31.79:8929/
 
@@ -12231,27 +12244,33 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 + 填写信息和权限，保存
 
-#### 34.2.6.4 Jenkins中添加凭据(**SonarQube,Kubernetes**,gitlab)
+#### 34.2.6.4 Jenkins中添加凭据(**SonarQube,Kubernetes**,gitlab个人token,gitlab个人账户)
 
-+ 打开http://192.168.31.79:8080/
+1. 打开http://192.168.31.79:8080/
 
-+ 点击左边**系统管理-凭据管理-Stores scoped to Jenkins(选System)-全局凭据(unrestricted)-右上角Add Credentials**
+2. 点击左边**系统管理-凭据管理-Stores scoped to Jenkins(选System)-全局凭据(unrestricted)-右上角Add Credentials**
 
-+ 填入上一步中sonarqube token
+3. 填入上一步中sonarqube token`sonarqube-secret`
 
-  ![image-20241106155445766](./_media/image-20241106155445766.png)
+![image-20241106155445766](./_media/image-20241106155445766.png)
 
-+ 继续创建kubernetes给jenkins使用的serviceaccount`jenkins-sa`密钥
+4. 继续创建kubernetes给jenkins使用的serviceaccount`kubernetes-jenkins-sa`密钥
 
-  ![image-20241106164413358](./_media/image-20241106164413358.png)
+   ![image-20241106164413358](./_media/image-20241106164413358.png)
 
-+ 继续创建gitlab给jenkins使用的`jenkins-gitlab`密钥
+5. 继续创建harbor给jenkins使用的`jenkins-harbor`账户信息
 
-  ![image-20241106210734914](./_media/image-20241106210734914.png)
+![image-20241107170435674](./_media/image-20241107170435674.png)
 
-+ 
+6. 继续创建gitlab给jenkins使用的`jenkins-gitlab`个人api token
 
-#### 34.2.6.5 Jenkins中配置**sonarqube**地址
+![image-20241107180957473](./_media/image-20241107180957473.png)
+
+7. 继续创建harbor给jenkins使用的`jenkin-gitlab-pipeline`账户信息
+   **给Jenkins任务job中流水线使用，用于拉取gitlab仓库中Jenkinsfile**
+   ![image-20241107181325106](./_media/image-20241107181325106.png)
+
+#### 34.2.6.5 Jenkins中配置**sonarqube**服务器地址
 
 + 打开http://192.168.31.79:8080/
 
@@ -12261,7 +12280,9 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 + 点击左下角应用,保存
 
-#### 34.2.6.6 Jenkins中配置**kubernetes**
+#### 34.2.6.6 Jenkins中配置**kubernetes**节点
+
+> 就是把k8s中机器当作Jenkins中从节点，用于执行任务
 
 + 打开http://192.168.31.79:8080/
 
@@ -12281,12 +12302,7 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
   + 继续填入jenkins地址， http://192.168.31.79:8080/ ，保存
 
-#### 34.2.6.7 Jenkins中配置gitlab账户信息（**这里使用账户密码，最简单**）
-
-+ 打开http://192.168.31.79:8080/
-+ 点击左边**系统管理-节点和云管理-左边的Clouds-New cloud**
-
-#### 34.2.6.8 Jenkins中给节点打上标签**maven**，用于后面执行maven构建
+#### 34.2.6.7 Jenkins中配置gitlab服务账户信息（**这里使用账户密码，最简单**）
 
 + 打开http://192.168.31.79:8080/
 
@@ -12296,7 +12312,7 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 + 测试连接成功，保存
 
-#### 34.2.6.9 增加jenkins的win-slave节点用于执行maven命令
+#### 34.2.6.8 增加jenkins的win-slave节点并打上标签**maven**，用于执行maven命令
 
 + 打开http://192.168.31.79:8080/
 
@@ -12338,17 +12354,154 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 + 点击保存，**点击立即构建**，等待构建结束（正确或错误），点进去查看输出详情
   ![image-20241106213756972](./_media/image-20241106213756972.png)
 
+#### 34.2.6.9 给jekins上master节点打上master标签，用于执行docker命令
+
++ 打开http://192.168.31.79:8080/
+
++ 点击左边**系统管理--节点和云管理--master节点右边的齿轮图案**配置
+
++ 再增加`master`标签，保存
+
+  ![image-20241107192414059](./_media/image-20241107192414059.png)
+
 ### 34.2.7 ==修改Jenkins的docker-compose==
 
 **目的:**
 
 1. 持久化存储maven打包后的jar
+
+   > 总结：保存在Jenkins执行任务的机器上
+
+   **不用改，Jenkins中全局配置中 Maven项目配置 中默认保存在 ~/.m2/reposity ，或者在Jenkins工作节点的机器上Maven配置文件中标签**`localRepository`**中配置的路径**
+
 2. win-slave上执行maven打包，然后将jar包回传到jenkins
+
 3. 将`kubectl`和`sonar scanner cli`客户端工具放到jenkins服务器上，为了方便Jenkins和k8s和sonarqube交互
 
 
 
-### 34.2.x docker容器挂载volume权限问题
+## 34.3 devops使用步骤
+
+### 24.3.1 Jenkins中创建流水线项目
+
+总结：
+
++ 流水线job webhook地址：http://192.168.31.79:8080/project/k8s-cicd-demo-pipeline
++ 流水线job webhook的token：7ec1677156ab38f9455f16bc7c0e4cf3
+
+1. 打开jenkins网址
+
+2. 点击**新建任务**，选择**流水线**，点击**确定**
+
+   ![image-20241107152839138](./_media/image-20241107152839138.png)
+
+3. 编辑一下描述信息，在**构建触发器**中选择（**记住该Jenkins job的webhook地址，gitlab仓库中配置webhook要用**）：
+
+   `Build when a change is pushed to GitLab. GitLab webhook URL: http://192.168.31.79:8080/project/k8s-cicd-demo-pipeline[
+     ](http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/configure#)`
+
+   ![image-20241107161714613](./_media/image-20241107161714613.png)
+
+4. 点击**高级**展开,根据自己需求设置,点击**Generate**生成Secret Token用于配置在gitlab的仓库中中**表示gitlab的该仓库,只需要有符合规范的事件如push,merge等,就会调用该Jenkins的webhook地址**,从而触发流水线功能。
+
+   ![image-20241107162354872](./_media/image-20241107162354872.png)
+
+5. **记下该token值m，gitlab仓库中配置webhook要用**
+
+6. 配置**流水线--选择Pipeline script** 右边三角选择hello，测试使用
+
+   ![image-20241107162805656](./_media/image-20241107162805656.png)
+
+7. 保存
+
+### 34.3.2 gitlab中创建项目并配置Jenkins任务webhook地址
+
+> [!Note]
+>
+> gitlab现在支持Jenkins集成了，所以可以不使用webhook。使用方法为：**打开gitlab项目仓库--设置--集成--Jenkins--配置**
+
+总结： git地址: http://192.168.31.79:8929/root/k8s-cicd-demo.git
+
+1. 打开 http://192.168.31.79:8929/
+
+2. 创建项目，起名字如我的就是`k8s-cicd-demo`(**可以不和jenkins的job名字一样**)
+
+3. 进入项目`k8s-cicd-demo`中，点击**设置--Webhooks--添加新的webhook**
+
+![image-20241107163438332](./_media/image-20241107163438332.png)
+
+4. 保存，点**测试--推送事件** （**测试jenkins的webhook是否可以成功调用**）
+
+![image-20241107163611725](./_media/image-20241107163611725.png)
+
+5. 打开Jenkins，进入流水线任务**k8s-cicd-demo-pipeline**，查看构建历史及输出
+
+![image-20241107164019131](./_media/image-20241107164019131.png)
+
+### 34.3.3 本地创建项目,并配置连接到gitlab仓库
+
+一个简单的springboot项目,访问ip:8080返回一些信息
+
+```bash
+cd existing_repo
+git init
+git branch dev
+gti checkout dev
+git add .
+git commit -m "xxxx"
+git remote add origin http://192.168.31.79:8929/root/k8s-cicd-demo.git
+git branch -M main
+git push -uf origin main
+```
+
+> 经测试本地git push后也可以触发Jenkins的流水线任务`k8s-cicd-demo-pipeline`
+
+### 34.3.5 sonarqube server中配置Jenkins任务回调webhook
+
+**用来通知，代码分析结束**
+
+1. 打开sonarqube server地址http://192.168.136.151:30165/ （映射后的）
+
+2. 点击**Administration--Configuration--Webhooks--Create**
+
+   ![image-20241107214353291](./_media/image-20241107214353291.png)
+
+### 34.3.4 再次配置Jenkins任务，使用gitlab中pipeline文件而不是定义好的脚本
+
+> 就是使用git仓库中的Jenkinsfile流水线脚本代替在jenkins中写死的的脚本
+
+1. 打开Jenkins网站，配置任务`k8s-cicd-demo-pipeline`
+
+2. 下滑到**流水线**
+
+   ![image-20241107182011167](./_media/image-20241107182011167.png)
+
+   ![image-20241107182113002](./_media/image-20241107182113002.png)
+
+### 34.3.5 创建流水线文件jenkinsfile测试maven和sonarqube服务
+
+```groovy
+```
+
+
+
+## 34.5 注意事项
+
+### 34.5.1 jenkins中需要配置gitlab,harbor,k8s,sonarqube服务信息
+
+见[34.2.6 jenkins配置（K8s,harbor,gitlab,sonarqube,）](#34.2.6 jenkins配置（K8s,harbor,gitlab,sonarqube,）)
+
+### 34.5.2 **gitlab项目中需要配置Jenkins任务的webhooks，用于通知Jenkins**
+
+**gitlab项目中需要配置Jenkins任务的webhooks，用于通知Jenkins**
+
+http://192.168.31.79:8080/project/k8s-cicd-demo-pipeline (jenkins任务的)
+
+### 34.5.3 sonarqube server也需要配置Jenkins webhook地址，用于告诉Jenkins代码分析完成**
+
+ http://192.168.31.79:8080/sonarqube-webhook/ (jenkins服务，`sonarqube-webhook`是插件)
+
+### 34.5.4 docker容器挂载volume权限问题
 
 参考地址：https://www.cnblogs.com/yfacesclub/p/14083299.html
 
