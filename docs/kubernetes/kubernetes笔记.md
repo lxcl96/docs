@@ -12082,10 +12082,10 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
    ```yaml
    services:
      jenkins:
-       image: 192.168.31.79/jenkins/jenkins:2.479.1-lts
+       image: dockerhub.102400000.xyz/jenkins/jenkins:2.479.1-lts
        container_name: jenkins
        restart: on-failure
-       user: 1002:1002 # 解决权限问题，前提要求已经给本地映射的文件夹这个uid权限了
+       user: 1002:1002
        environment:
          DOCKER_HOST: tcp://docker:2376
          DOCKER_CERT_PATH: /certs/client
@@ -12097,6 +12097,9 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
          - /etc/localtime:/etc/localtime:ro
          - /srv/jenkins/jenkins-data:/var/jenkins_home
          - /srv/jenkins/jenkins-docker-certs:/certs/client:ro
+         - ./kubectl:/usr/bin/kubectl # 挂载kubectl，为了使用kubectl
+         - /usr/bin/docker:/usr/bin/docker # 挂载docker，为了使用docker
+         - /var/run/docker.sock:/var/run/docker.sock # docker.sock，为了使用主机的docker 引擎  
        shm_size: "128m"
        mem_limit: 768mb
        cpus: '2'
@@ -12151,13 +12154,17 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
 
      This plugin provides a deep integration between Jenkins and Maven. It adds support for automatic triggers between projects depending on SNAPSHOTs as well as the automated configuration of various Jenkins publishers such as Junit.
 
-   + `Config File ProviderVersion`
+   + `Config File Provider`
 
      Ability to provide configuration files (e.g. settings.xml for maven, XML, groovy, custom files,...) loaded through the UI which will be copied to the job workspace.
      
    + `Git Parameter`
 
      Adds ability to choose branches, tags or revisions from git repositories configured in project.
+     
+   + `Pipeline:Stage Step` 新版本没有阶段图了.需要自己安装插件
+
+     Adds the Pipeline step `stage` to delineate portions of a build.
 
 8. 插件安装完成后，勾选安装界面最下面的**安装完成后重启Jenkins**
 
@@ -12168,7 +12175,7 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
 + Harbor https://192.68.31.79
 + SonarQube http://192.168.136.151:30165/ (虚拟机-k8s中),映射到 http://192.168.31.80:30165/
 + Jenkins http://192.168.31.79:8080/
-+ Kubernetes https://192.168.136.151:6443  (虚拟机-k8s中),映射到 http://192.168.31.80:30164/
++ Kubernetes https://192.168.136.151:6443  (虚拟机-k8s中),映射到 https://192.168.31.80:30164/
 
 > 192.168.31.80机器记得防火墙开放30165 10364端口 (入站)
 
@@ -12282,7 +12289,11 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 #### 34.2.6.6 Jenkins中配置**kubernetes**节点
 
-> 就是把k8s中机器当作Jenkins中从节点，用于执行任务
+> [!Note]
+>
+> 此功能需要搭配pod模板使用，作用就是在**k8s集群中，依据pod模板运行jenkins-agent作为从节点接入jenkins master**，用于执行cicd任务，而不是用来管理k8s集群的。和**kubectl的本质区别**
+>
+> 总结就是把k8s中机器当作Jenkins中从节点，用于执行任务。所以如果想要k8s集群执行maven编译命令，则必须要配置pod模板（本次没用到）。
 
 + 打开http://192.168.31.79:8080/
 
@@ -12366,19 +12377,84 @@ $ kubectl get secret jenkins-sa-token-tqrjw -n devops-test -o jsonpath='{.data.t
 
 ### 34.2.7 ==修改Jenkins的docker-compose==
 
+> [!Note]
+>
+> 如果jenkins服务是以容器的方式运行的，那么**流水线脚本中sh命令（选择Jenkins-master节点）都是运行在docker容器中的，而不是宿主机上**，所以此时需要将一些工具如`kubectl`和`sonar scanner cli`放在docker容器中。
+>
+> 当然如果jenkins服务是直接运行在Linux机器上，那么只需要将这些容器配置在该Linux上即可。
+
 **目的:**
 
-1. 持久化存储maven打包后的jar
+1. jenkinss server端持久化存储maven打包后的jar
 
-   > 总结：保存在Jenkins执行任务的机器上
+   总结：
+
+   1. 先保存在Jenkins执行任务的机器上的`jenkins-agent目录/workspace/任务job目录/target`
+   2. 然后可以可以通过流水线脚本`post`回传到服务端，默认放置在`/var/jenkins_home/jobs/任务名/builds/构建测试/archive/target`
 
    **不用改，Jenkins中全局配置中 Maven项目配置 中默认保存在 ~/.m2/reposity ，或者在Jenkins工作节点的机器上Maven配置文件中标签**`localRepository`**中配置的路径**
 
 2. win-slave上执行maven打包，然后将jar包回传到jenkins
 
-3. 将`kubectl`和`sonar scanner cli`客户端工具放到jenkins服务器上，为了方便Jenkins和k8s和sonarqube交互
+   依赖流水线脚本
 
+   ```groovy
+   stage('打包并将jar包回传') {
+       agent { label 'maven'}
+       steps {
+           bat 'mvn package'
+           // bat 'pwd' //多个命令
+       }
+       post {
+           success {
+               archiveArtifacts artifacts: '**/target/*.jar', allowEmptyArchive: false //归档
+           }
+       }
+   }
+   ```
 
+3. 将`sonar scanner cli`客户端工具放到Jenkins agent 上如windows-slave(**也可以放在jenkins-master节点或其他任何节点**)，为了**Jenkins任何节点能将代码发送到sonarqube server进行代码分析**
+
+   sonar scanner cli工具（win或Linux）下载地址：https://docs.sonarsource.com/sonarqube/latest/analyzing-source-code/scanners/sonarscanner/
+
+   流水线脚本
+
+   ```groovy
+   stage('sonarqube分析代码质量') {
+       agent { label 'maven'}
+       steps {
+   		// ##使用jenkins内配置的全局凭证（也可以不用，但是需要命令行指定，或者soanr scanner cli配置文件在指定）
+           withCredentials([string(credentialsId: "$SONAR_CREDENTIAL_ID", variable: 'SONAR_TOKEN')]) {
+               withSonarQubeEnv('sonarqube') {
+                   script {
+                       def pwdValue = bat(script: 'echo %cd%', returnStdout: true).trim()
+                       echo "当前目录是：$pwdValue"
+                       // ## 执行Windows命令 写入sonar-scanner-cli绝对路径(要提前放在机器上)
+                       bat "${SONAR_SCANNER_HOME}\\bin\\sonar-scanner -Dsonar.projectKey=$PROJECT_NAME " + //注意中间要有空格分割
+                           "-Dsonar.sources=. " + //注意中间要有空格分割
+                           "-Dsonar.java.binaries=target/classes"  // 指定编译输出目录
+                   }
+   
+               }
+           }
+           //设置超时时间  可能会很久
+           timeout(time: 1, unit: 'HOURS') {
+               waitForQualityGate abortPipeline: true
+           }
+       }
+   }
+   ```
+
+4. 将`kubectl`客户端工具放到Jenkins-master上(**也可以放在jenkins其他任何节点**)，为了**Jenkins任何节点都能直接通过kubectl调用kubernetes服务**
+
+   + kubectl windows下载工具：https://kubernetes.io/zh-cn/docs/tasks/tools/install-kubectl-windows/ (最好下载和k8s服务一样版本的)
+   + kubectl linux下载工具：https://kubernetes.io/zh-cn/docs/tasks/tools/install-kubectl-linux/  (最好下载和k8s服务一样版本的)
+
+   修改Jenkins docker-compose.yaml将kubectl文件映射到Jenkins容器的`/usr/bin/`目录下，方便使用（**权限要记得改给其他用户执行权限，因为jenkins默认没有用户**）
+
+   > 如果容器中kubectl还是无法执行，那么在容器内手动给他授予可执行权限`chmod +x /usr/bin/kubectl`(**乌龙了，自己没仔细看权限，都没有执行权限，要自己加**)
+
+5. 将宿主机的`/usr/bin/docker`和`/var/run/docker.socker`挂载到Jenkins容器中，为了能执行docker命令（如build，push等）
 
 ## 34.3 devops使用步骤
 
@@ -12478,7 +12554,83 @@ git push -uf origin main
 
    ![image-20241107182113002](./_media/image-20241107182113002.png)
 
-### 34.3.5 创建流水线文件jenkinsfile测试maven和sonarqube服务
+### 34.3.5 配置kubeconfig文件
+
+> [!Note]
+>
+> 为了让Jenkins节点可以使用kubectl直接操作kubernetes资源，有下面三种方法
+>
+> 1. 不配置kubeconfig文件直接使用命令行参数（**注意windows平台token必须使用双引号，否则可能会导致token失效**）
+>
+>    ```bash
+>    # windows平台推荐使用双引号，否则可能会出现问题(无法正确传递)
+>    kubectl get pod --insecure-skip-tls-verify   --token="serviceaccount的token值" -s=https://192.168.31.80:30164  
+>    ```
+>
+>    参考地址：https://kubernetes.io/zh-cn/docs/reference/kubectl/generated/kubectl/
+>
+> 2. Jenkins节点中配置kubeconfig
+>
+> 3. Jenkins server端配置kubeconfig
+
+***本次：在Jenkins的service端配置kubeconfig，且使用ServiceAccount***
+
+1. jJenkins安装插件`Config File Provider`
+
+2. 打开**系统管理--Managed files--Add a new config**
+
+3. 选择配置文件类型，kubeconfig是yaml类型，如果没有选择`Custom file`
+
+4. 依次填写 **Name,Comment,Content**
+
+   使用serviceaccount的kubeconfig范例
+
+   ```yaml
+   # 可以参考k8s集群中~/.kube/config文件，本质一样的，只不过这里用到是token而不是证书
+   apiVersion: v1
+   kind: Config
+   clusters:
+   - cluster:
+       server: https://192.168.31.80:30164 # k8服务地址，映射后的 
+       insecure-skip-tls-verify: true # 对应自签证书，跳过证书验证
+     name: kubernetes # k8s集群的名字
+   
+   users:
+   - name: jenkins-sa # 使用的sa账户，即serviceaccount名字
+     user:
+       token: 'token值' # 该sa账户对应的token值，可在sa对应的secret中获取到（记得base64解码）
+   contexts:
+   - context:
+       cluster: kubernetes
+       user: jenkins-sa
+     name: jenkins-sa@kubernetes
+   
+   current-context: jenkins-sa@kubernetes
+   ```
+
+5. 点击submit，记下**该配置文件的id，等下在pipeline脚本中使用**
+
+   ![image-20241108163637419](./_media/image-20241108163637419.png)
+
+### 34.3.6 确认Jenkins容器可以使用kubectl命令和docker命令
+
+确认Jenkins容器可以使用kubectl命令和docker命令，即
+
++ `/usr/bin/kubectl`
++ `/usr/bin/docker`
++ `/var/run/docker.sock`
+
+**都已经被挂载，且可以使用**
+
+### 34.3.7 创建dockerfile
+
+```
+FROM 
+```
+
+### 34.3.8 创建流水线文件jenkinsfile
+
+> 脚本步骤需要一步步进行测试来写
 
 ```groovy
 ```
