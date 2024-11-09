@@ -12085,11 +12085,12 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
        image: dockerhub.102400000.xyz/jenkins/jenkins:2.479.1-lts
        container_name: jenkins
        restart: on-failure
-       user: 1002:1002
-       environment:
-         DOCKER_HOST: tcp://docker:2376
-         DOCKER_CERT_PATH: /certs/client
-         DOCKER_TLS_VERIFY: 1
+       user: 1002:1002 # 必须使用root,如果要使用宿主机的docker命令
+       privileged: true
+       # environment:
+       #   DOCKER_HOST: tcp://docker:2376 # 这三个必须注释否则无法连接到docker引擎
+       #   DOCKER_CERT_PATH: /certs/client
+       #   DOCKER_TLS_VERIFY: 1
        ports:
          - "8080:8080" # web端口
          - "50000:50000" # 控制器端口
@@ -12097,9 +12098,10 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
          - /etc/localtime:/etc/localtime:ro
          - /srv/jenkins/jenkins-data:/var/jenkins_home
          - /srv/jenkins/jenkins-docker-certs:/certs/client:ro
-         - ./kubectl:/usr/bin/kubectl # 挂载kubectl，为了使用kubectl
-         - /usr/bin/docker:/usr/bin/docker # 挂载docker，为了使用docker
-         - /var/run/docker.sock:/var/run/docker.sock # docker.sock，为了使用主机的docker 引擎  
+         - /etc/docker:/etc/docker
+         - ./kubectl:/usr/bin/kubectl # 挂载kubectl，为了使用kubectl(需要给权限)
+         - /usr/bin/docker:/usr/bin/docker # 挂载docker，为了使用docker(需要给权限)
+         - /var/run/docker.sock:/var/run/docker.sock # docker.sock，为了使用主机的docker 引擎  (需要将jenkins假如docker组)
        shm_size: "128m"
        mem_limit: 768mb
        cpus: '2'
@@ -12612,13 +12614,37 @@ git push -uf origin main
 
    ![image-20241108163637419](./_media/image-20241108163637419.png)
 
-### 34.3.6 确认Jenkins容器可以使用kubectl命令和docker命令
+### 34.3.6 ==再次调整jenkins的docker-compose.yaml文件==
 
-确认Jenkins容器可以使用kubectl命令和docker命令，即
+经过测试发现，**Jenkins容器中docker无法正常使用，因为没有权限，隐藏需要进行以下操作**：
 
-+ `/usr/bin/kubectl`
-+ `/usr/bin/docker`
-+ `/var/run/docker.sock`
+1. 删除Jenkins中docker-compose.yaml中环境变量`DOCKER_HOST`,`DOCKER_CERT_PATH`和`DOCKER_TLS_VERIFY`。**不然会有证书和网络的问题**
+
+2. 查看宿主机上`/usr/bin/docker`命令的所有者及权限设置，**确保Jenkins用户有执行权限**
+
+3. 查看宿主机上`/var/run/docker.sock`文件的所有者及权限设置，**确保Jenkins用户有读取权限**
+
+4. (推荐方法，**缺点需要每次重启都要运行这个操作**)：将**宿主机上Jenkins用户加入docker组，以此来使用文件**`/var/run/docker.sock`
+
+   ```bash
+   # 1.将Jenkins用户加入docker组（无效，跳过）
+   sudo usermod jenkins -aG docker # 宿主机docker组id为995 （无用，只能管宿主机的，可以跳过）
+   # 2.以root用户进入Jenkins容器
+   sudo docker compose exec -it -u root jenkins bash
+   # 3.（容器内）增加用户组docker，并指定gid为995 名字无所谓但gid必须和宿主机的完全一样（因为用户名和组名最后都会指向uid和gid）
+   groupadd -g 995 docker
+   # 4.（容器内）将Jenkins用户加入组 docekr 995
+   usermod -aG docker jenkins
+   # 5.切换到jenkins用户，验证(成功)
+   docker ps
+   ```
+
+> [!Note]
+>
+> 1. 所以推荐运行Jenkins时指定用户root，**不指定默认以nologin用户**(**就不需要创建docekr组了**)
+> 2. 还有一种方法就是重新构建镜像，在上面封装创建用户组操作
+>
+> ***如果刚开始以Jenkins用户运行，后面切换到root用户，会导致源数据读取部分失败。因为Jenkins用户和root的家目录不同，即配置文件的位置不同了（如gitlab）。所以请谨慎切换***
 
 **都已经被挂载，且可以使用**
 
