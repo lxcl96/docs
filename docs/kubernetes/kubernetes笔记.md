@@ -12082,7 +12082,9 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
    ```yaml
    services:
      jenkins:
-       image: dockerhub.102400000.xyz/jenkins/jenkins:2.479.1-lts
+       # image: 192.168.31.79/jenkins/jenkins:2.479.1-lts
+       # 新增docker组的镜像(增加了docker组,并更改了Jenkins用户uid=1002)
+       image: 192.168.31.79/jenkins/jenkins:2.479.1-lts-with-docker-group
        container_name: jenkins
        restart: on-failure
        user: 1002:1002 # 必须使用root,如果要使用宿主机的docker命令
@@ -12091,6 +12093,8 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
        #   DOCKER_HOST: tcp://docker:2376 # 这三个必须注释否则无法连接到docker引擎
        #   DOCKER_CERT_PATH: /certs/client
        #   DOCKER_TLS_VERIFY: 1
+       group_add: # 必须在这儿加,dockerfile中加会不生效
+         - 995
        ports:
          - "8080:8080" # web端口
          - "50000:50000" # 控制器端口
@@ -12099,8 +12103,8 @@ docker安装方式： https://docs.gitlab.com/ee/install/docker/installation.htm
          - /srv/jenkins/jenkins-data:/var/jenkins_home
          - /srv/jenkins/jenkins-docker-certs:/certs/client:ro
          - /etc/docker:/etc/docker
-         - ./kubectl:/usr/bin/kubectl # 挂载kubectl，为了使用kubectl(需要给权限)
-         - /usr/bin/docker:/usr/bin/docker # 挂载docker，为了使用docker(需要给权限)
+         - ./kubectl:/usr/bin/kubectl # 挂载kubectl，为了使用kubectl(需要给x权限)
+         - /usr/bin/docker:/usr/bin/docker # 挂载docker，为了使用docker(需要给x权限)
          - /var/run/docker.sock:/var/run/docker.sock # docker.sock，为了使用主机的docker 引擎  (需要将jenkins假如docker组)
        shm_size: "128m"
        mem_limit: 768mb
@@ -12645,20 +12649,410 @@ git push -uf origin main
 > 2. 还有一种方法就是重新构建镜像，在上面封装创建用户组操作
 >
 > ***如果刚开始以Jenkins用户运行，后面切换到root用户，会导致源数据读取部分失败。因为Jenkins用户和root的家目录不同，即配置文件的位置不同了（如gitlab）。所以请谨慎切换***
+>
+> **最好确保本地Jenkins用户和镜像中Jenkins用户uid一样**
 
 **都已经被挂载，且可以使用**
 
+##### 附加操作(经测试有效)
+
+重新构建Jenkins镜像，增加新组。
+
+下面是dockerfile的内容：
+
+原镜像层命令：https://hub.docker.com/layers/jenkins/jenkins/2.479.1-lts/images/sha256-51b04d38d6c511ec2042a669610526a60d650a1b060ec4276b2eafd5b7dfccde?context=explore
+
+```dockerfile
+FROM jenkins:2.479.1-lts
+LABEL name=jenkins
+LABEL version=2.479.1-lts-with-docker-group
+USER root
+
+# 因为我宿主机Jenkins用户uid1002不等于容器中Jenkins用户uid1000，特此修改
+RUN usermod -u 1002 jenkins \
+    && groupmod -g 1002 jenkins \
+    && groupadd -g 995 docker 
+    # 不要在dockerfile中加,会导致不生效(要切换环境变量),请在docker-compose中加group_add
+    # && usermod -aG docker jenkins # Jenkins用户加入组docker
+
+USER jenkins
+
+# EXPOSE 8080/tcp # 和原镜像一样可以不写
+# ENTRYPOINT ["/usr/bin/tini" "--" "/usr/local/bin/jenkins.sh"] # 如果还是要原来的入口命令，可以不写
+```
+
+> 理论上没问题，但实际上运行后需要退出shell重进才会生效。(**所以必须在docker-compose.yaml中指定新加组**`group_add: 995`)
+
 ### 34.3.7 创建dockerfile
 
-```
-FROM 
+```dockerfile
+FROM dockerhub.102400000.xyz/library/openjdk:17-slim
+LABEL org.opencontainers.image.authors="tom"
+LABEL name="test-devops"
+LABEL version="v1"
+# 为了省事,直接用root (sonarqube中会报错,手动允许,jenkins再重新构建即可)
+USER root
+# 加快随机数生成的速度,提升性能
+ENV JAVA_OTS="-Xmx250m -Djava.security.egd=file:/dev/./urandom" TIMEZONE=Asia/Shanghai
+RUN mkdir /app && ln -snf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime && echo ${TIMEZONE} > /etc/timezone
+
+WORKDIR /app
+# 效果:将ASCILL码最后的jar重命名为 app.jar(适合只有一个jar包,忽略版本)
+# NEED_REPLACE/表示需要被替换
+# JENKINS_ARCHIVE_DIR表示具体目录又jenkinsfile中变量决定
+COPY NEED_REPLACE/JENKINS_ARCHIVE_DIR/*.jar app.jar
+# 多jar包拷贝
+# COPY target/*.jar .
+
+EXPOSE 9999
+CMD ["sh","-c","java ${JAVA_OTS} -jar app.jar"]
 ```
 
-### 34.3.8 创建流水线文件jenkinsfile
+### 34.3.8 修改serviecaccount权限
+
+因为默认给的权限太低了,不能部署`deployment`等应用,所以打算更新权限:
+
+为了省事,我就给**devops-test命名空间下的管理权限,只对该namespace**
+
+1. **k8s更新serviceaccount权限**
+
+   ```yaml
+   # https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: jenkins-sa
+     namespace: devops-test
+   ---
+   # 注释掉
+   # https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+   # apiVersion: rbac.authorization.k8s.io/v1
+   # kind: ClusterRole 
+   # metadata:
+   #   name: jenkins-sa
+   # rules:
+   # - apiGroups: [""] # "" indicates the core API group
+   #   resources: ["pods", "pods/exec", "secrets", "persistentvolumeclaims"]
+   #   verbs: ["get", "list", "create", "delete"]
+   ---
+   # https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRoleBinding
+   metadata:
+     name: jenkins-sa
+   subjects:
+   - kind: ServiceAccount
+     name: jenkins-sa
+     namespace: devops-test
+   roleRef:
+     kind: ClusterRole
+     # name: jenkins-sa # 权限太低,一个个配置太麻烦
+     name: cluster-admin # 给命名空间devops-test下的所有权限
+     apiGroup: rbac.authorization.k8s.io
+   ---
+   ```
+
+2. **获取更新后的secret**
+
+   ```bash
+   kubectl get secrets jenkins-sa-token-lv88p -n devops-test -o jsonpath='{.data.token}'|base64 --decode
+   ```
+
+3. **更新Jenkins中配置的secret**
+   ![image-20241111170839312](./_media/image-20241111170839312.png)
+
+4. **修改kubeconfig文件,改变里面的token**
+
+   ![image-20241111171917126](./_media/image-20241111171917126.png)
+
+
+
+### 34.3.9 增加k8s deploy部署模板 
+
+**和kubeconfig一样借助插件Config File Management配置**
+
+![image-20241111192859022](./_media/image-20241111192859022.png)
+
+```yaml
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+# https://kubernetes.io/docs/concepts/services-networking/service/
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-cicd-demo
+  namespace: NAMESPACE
+spec:
+  selector:
+    app: k8s-cicd-demo
+  type: NodePort
+  ports:
+  - name: web
+    protocol: TCP
+    port: 80
+    targetPort: 9999
+    nodePort: 30163
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-cicd-demo
+  namespace: NAMESPACE
+  labels:
+    app: k8s-cicd-demo
+spec:
+  selector:
+    matchLabels:
+      app: k8s-cicd-demo
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: k8s-cicd-demo
+    spec:
+      containers:
+      - name: k8s-cicd-demo
+        image: IMAGE:TAG # 需要被替换的
+        imagePullPolicy: Always # 因为镜像会更新,但是标签不变所以要总是拉取
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits: # 没注意设置太低,总是导致oom
+            cpu: 1000m
+            memory: 1000Mi 
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 9999
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9999
+          initialDelaySeconds: 10
+          timeoutSeconds: 2
+          successThreshold: 1
+          failureThreshold: 3
+        ports:
+        - containerPort: 9999
+          name: web
+      restartPolicy: Always
+---
+
+```
+
+### 34.3.8 单分支创建流水线文件jenkinsfile(重点)
 
 > 脚本步骤需要一步步进行测试来写
 
 ```groovy
+pipeline {
+    agent none //设置不绑定全局节点
+
+     //设置Jenkins脚本全局变量
+     environment {
+         //获取当前job任务信息
+//          CURRENT_JOB_BUILD_NAME = env.BUILD_NUMBER  //env环境变量不能直接获取，必须在steps中获取
+//          CURRENT_JOB_BUILD_NUMBER = env.BUILD_NUMBER
+
+         //需要被替换的标志
+         NEED_REPLACE_TAG = 'NEED_REPLACE/'
+         //设置dockerfile要替换的归档目录 即将其替换为实际归档的目录,解决打包和打镜像不在同一台机器上的问题
+         DOCKERFILE_ARCHIVE_DIR = 'JENKINS_ARCHIVE_DIR'
+
+         //设置项目名字
+         PROJECT_NAME = 'k8s-cicd-demo'
+         //项目镜像所在仓库名
+         PROJECT_HARBOR_REPO_NAME = 'test-devops'
+         //设置项目的镜像tag 版本
+         PROJECT_IMAGE_TAG = 'latest'
+         //插件`Config File Provider`中定义的文件id
+         KUBE_CONFIG_DEV_ID = '2f5b782a-1516-44a3-8448-8a031cd1c5aa'
+         //部署到k8s集群的pod模板,即yaml文件
+         KUBE_DEPLOY_POD_TEMPLATE_DEV_ID = 'a511c95a-4cd3-4373-94a7-9679353e066f'
+         //部署到k8s中的命名空间
+         KUBE_DEPLOY_NAMESPACE = 'devops-test'
+
+         //harbor 镜像源
+         HARBOR_REGISTRY_URL = 'dockerhub.102400000.xyz'
+         HARBOR_CREDENTIAL_ID = 'jenkins-harbor' //Jenkins全局凭证中配置harbor账户密码的id
+         // 设置 SonarQube 的环境变量
+         SONAR_SERVER_URL = 'http://your-sonarqube-server'  // SonarQube 服务器的 URL
+         SONAR_SCANNER_HOME = 'D:\\Code\\sonarqube-scanner-cli'  // SonarScanner-cli 的路径
+         SONAR_CREDENTIAL_ID = 'sonarqube-secret'  // Jenkins全局凭证中配置sonarqube账户令牌id
+     }
+    stages {
+         stage('0.打印所有环境变量') {
+            agent any
+            steps {
+                script {
+                    sh 'printenv' // 打印所有系统变量
+                }
+            }
+         }
+         stage('1.任务开始，初始化环境变量') {
+             agent { label 'master'}
+             steps {
+                 input(id: 'is-continue', message: '是否继续')
+                 echo "流水线任务开始 目前git分支为: ${env.GIT_BRANCH}"
+             }
+         }
+         stage('2.测试maven是否存在') {
+             agent { label 'maven'}
+             steps {
+                 bat 'mvn -v'  //windows使用bat，linux使用sh
+             }
+         }
+         stage('3.执行单元测试') {
+             agent { label 'maven'}
+             steps {
+                 bat 'mvn clean test'
+                 // bat 'pwd' //多个命令
+             }
+         }
+         stage('4.sonarqube分析代码质量') {
+             agent { label 'maven'}
+             steps {
+
+                 // 从Jenkins全局凭证中取名字为sonarqube-secret的凭证，并注入变量 SONAR_TOKEN 为了后面使用
+                 withCredentials([string(credentialsId: "$SONAR_CREDENTIAL_ID", variable: 'SONAR_TOKEN')]) {
+                     //设置sonarqube scanner需要的环境变量，提前做准备
+                     withSonarQubeEnv('sonarqube') {
+
+                         //script为了能输出变量
+                          script {
+                              //######取决于创建节点时--指定的远程工作目录
+                             //#######运行在 jenkins-agent的目录/workspace/任务job目录下
+                             def pwdValue = bat(script: 'echo %cd%', returnStdout: true).trim()
+                             echo "当前目录是：$pwdValue"
+
+                             // 使用 SonarScanner 进行代码质量分析
+                             bat "${SONAR_SCANNER_HOME}\\bin\\sonar-scanner -Dsonar.projectKey=$PROJECT_NAME " + //注意中间要有空格分割
+                                 "-Dsonar.sources=. " + //注意中间要有空格分割
+                                 "-Dsonar.java.binaries=target/classes"  // 指定编译输出目录
+                          }
+
+                     }
+                 }
+                 //设置超时时间  可能会很久
+                 timeout(time: 1, unit: 'HOURS') {
+                     waitForQualityGate abortPipeline: true
+                 }
+             }
+         }
+         stage('5.打包并将jar包回传') {
+             agent { label 'maven'}
+             steps {
+                 bat 'mvn clean package -DskipTests'
+                 // bat 'pwd' //多个命令
+             }
+             post {
+                 success {
+                     //### 成功归档上传到服务端，默认地址(容器) /var/jenkins_home/jobs/任务名/builds/构建次数/archive/target
+                     archiveArtifacts artifacts: '**/target/*.jar', allowEmptyArchive: false
+                 }
+                 // 可以使用scp命令传递到指定机器上共享卷中，实现上传到容器中
+//                  script {
+//                     bat """
+//                         scp 本地文件 用户@地址:远程目录
+//                         """
+//                  }
+             }
+         }
+
+        //linux上jenkins的工作目录是  /var/jenkins_home/workspace/任务/          里面是gitlab中所有文件
+        stage('6.根据dockerfile构建镜像') {
+            agent { label 'master'}
+            steps {
+                script {
+                    //针对单文件
+                    def sourceFile="/var/jenkins_home/jobs/${env.JOB_BASE_NAME}/builds/${env.BUILD_NUMBER}/archive/target/*"
+                    echo """
+                        ${sourceFile}
+                    """
+                    sh "mkdir -p target"
+                    sh "cp -R /var/jenkins_home/jobs/${env.JOB_BASE_NAME}/builds/${env.BUILD_NUMBER}/archive/target ."
+                    // 替换 dockerfile 中目录
+                    sh """
+                        sed -i "s#${NEED_REPLACE_TAG}${DOCKERFILE_ARCHIVE_DIR}/#target/#g" Dockerfile
+                    """
+                    def ret = sh(script: 'cat Dockerfile', returnStdout: true)
+                    echo "${ret}"
+                    //构建镜像  --no-cache 解决多次构建会出现<none>镜像
+                    sh "docker build --no-cache -t ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG} -f Dockerfile ."
+
+                }
+            }
+        }
+
+        stage('7.上传镜像') {
+            agent { label 'master'}
+            steps {
+                withCredentials([usernamePassword(usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD', credentialsId: "$HARBOR_CREDENTIAL_ID")]) {
+                    // 登录harbor
+                    sh "echo '${REGISTRY_PASSWORD}'|docker login -u ${REGISTRY_USERNAME} --password-stdin  ${HARBOR_REGISTRY_URL}"
+                    //上传镜像到镜像仓库
+                    sh "docker push ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('8.部署到开发环境') {
+            agent { label 'master'}
+//             when {
+//                 branch 'origin/dev' // 只允许git中 dev分支(分支必须完全一样)
+//                 /* 或者使用正则
+//                 expression {
+//                     return env.GIT_BRANCH ==~ /.*dev/
+//                 }
+//                 */
+//             }
+            steps {
+                // 确认操作,需要你在控制台允许,才会继续执行后续操作
+                input(id: 'deploy-to-dev', message: '是否确认部署到 dev 开发环境')
+                //读取 插件`Config File Provider`中定义的文件, 读取内容注入到变量 KUBE_CONFIG_DEV (实际是配置文件名,生成了临时文件到 workspace/任务job目录下)
+                //configFileProvider([configFile(fileId: "${KUBE_CONFIG_DEV_ID}", variable: 'KUBE_CONFIG_DEV')]), //一致性指定多个配置文件的路径方式
+                //读取 插件`Config File Provider`中定义的文件, 读取内容注入到变量 KUBE_CONFIG_DEV (实际是配置文件名,生成了临时文件到 workspace/任务job目录下)
+                configFileProvider([
+                        configFile(fileId: "${KUBE_CONFIG_DEV_ID}", variable: 'KUBE_CONFIG_DEV'),
+                        configFile(fileId: "${KUBE_DEPLOY_POD_TEMPLATE_DEV_ID}", variable: 'KUBE_DEPLOY_POD_TEMPLATE_DEV')
+                    ]) {
+                    // groovy中 转义符 \ 要多加1个防止转义
+                    echo """
+                        __________________
+                        1. sed -ri 's#namespace\\:\\s{1,}?NAMESPACE#namespace\\:\\ ${KUBE_DEPLOY_NAMESPACE}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}
+                        2. sed -ri 's#image\\:\\s{1,}?IMAGE\\:TAG#image\\:\\ ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}
+                        __________________
+                    """
+
+                    //替换 k8s中deploy.yaml文件中命名空间 namespace: NAMESPACE替换
+                    sh "sed -ri 's#namespace\\:\\s{1,}?NAMESPACE#namespace\\:\\ ${KUBE_DEPLOY_NAMESPACE}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}"
+                    //替换 k8s中deploy.yaml文件中镜像 image: IMAGE:TAG 替换
+                    sh "sed -ri 's#image\\:\\s{1,}?IMAGE\\:TAG#image\\:\\ ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}"
+                    script {
+                        def txt = sh(script: "cat ${KUBE_DEPLOY_POD_TEMPLATE_DEV}", returnStdout: true)
+                        echo "yaml内容如下: ${txt}"
+                    }
+                    sh "kubectl apply -f ${KUBE_DEPLOY_POD_TEMPLATE_DEV} --kubeconfig=${KUBE_CONFIG_DEV} " // 小心job名子带空格会导致读取不到
+                }
+            }
+        }
+
+        stage('9.后续操作') {
+            agent { label 'master'}
+            steps {
+                echo "后续操作..."
+            }
+        }
+    }
+}
+
 ```
 
 
