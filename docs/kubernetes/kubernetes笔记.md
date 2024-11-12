@@ -13057,6 +13057,368 @@ pipeline {
 
 
 
+## 34.4 jenkins配置git多分支(参数化构建)
+
+### 34.4.1 Jenkins中修改为参数化构建
+
+原来Jenkins任务未勾选参数化构建，请勾选参数化构建。
+
+**jenkins主页--任务--配置--参数化构建过程：**
+
+1. 勾选参数化构建
+
+   ![image-20241112144241845](./_media/image-20241112144241845.png)
+
+2. 选择**选项参数**，用于配置部署到kubernetes的命名空间
+
+   ![image-20241112144823495](./_media/image-20241112144823495.png)
+
+3. 增加**git参数**用于实现按照分支的不同来构建
+   ![image-20241112144445840](./_media/image-20241112144445840.png)
+
+4. 查看效果
+
+   ![image-20241112145025189](./_media/image-20241112145025189.png)
+
+### 34.4.2 生成切换git分支的pipeline script
+
+虽然配置了参数化构建，但是无法生效。需要你在Jenkinsfile流水线脚本中**使用该参数才行**。
+
+目的：**为了根据分支的不同来拉取不同分支的代码**
+
+![image-20241112145501998](./_media/image-20241112145501998.png)
+
+
+
+```groovy
+// 分支写死了没关系，到jenkinsfile再改
+checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkin-gitlab-pipeline', url: 'http://192.168.31.79:8929/root/k8s-cicd-demo.git']])
+```
+
+### 34.4.3 配置jenkinsfile文件(master分支和dev分支)
+
+**master分支和dev分支的jenkinsfile文件都修改，并推送到gitlab.** 可以先去gitlab webhook中先关闭推送事件触发
+
+```groovy
+pipeline {
+    agent none 
+     environment {
+		 // dockerfile配置
+         NEED_REPLACE_TAG = 'NEED_REPLACE/'
+         DOCKERFILE_ARCHIVE_DIR = 'JENKINS_ARCHIVE_DIR'
+
+         PROJECT_NAME = 'k8s-cicd-demo'
+         // k8s配置
+         KUBE_CONFIG_DEV_ID = '2f5b782a-1516-44a3-8448-8a031cd1c5aa'
+         KUBE_DEPLOY_POD_TEMPLATE_DEV_ID = 'a511c95a-4cd3-4373-94a7-9679353e066f'
+         KUBE_DEPLOY_NAMESPACE = 'devops-test'
+
+         //harbor 镜像源
+         PROJECT_IMAGE_TAG = 'latest'
+         HARBOR_REGISTRY_URL = 'dockerhub.102400000.xyz'
+         HARBOR_CREDENTIAL_ID = 'jenkins-harbor' 
+         PROJECT_HARBOR_REPO_NAME = 'test-devops'
+         // 设置 SonarQube 的环境变量
+         SONAR_SERVER_URL = 'http://your-sonarqube-server'  
+         SONAR_SCANNER_HOME = 'D:\\Code\\sonarqube-scanner-cli'  
+         SONAR_CREDENTIAL_ID = 'sonarqube-secret'  
+     }
+    //***就是网页端Jenkins任务配置 git参数，选项参数（这给你另一种方法进行配置）
+    parameters {
+        gitParameter name: 'branch',branch: '',branchFilter: '.*', defaultValue: 'origin/main', description: '请选择要发布的版本', quickFilterEnabled: false, selectedValue: 'NONE',...
+        choice(name: 'namespace', choices: ['devops-test','default'], description: '用于配置部署到kubernetes的命名空间')
+    }
+    stages {
+		// 真正实现选择不同的分支，构建不同的源码
+         stage('pre.切换git分支') {
+             agent any
+             steps {
+                 checkout scmGit(
+                     branches: [[name: "${branch}"]], //取自参数化构建的 git参数 名(也可以通过${env.branch}选择，也可以通过${param.branch}选择)
+                     extensions: [],
+                     userRemoteConfigs: [
+                        [credentialsId: 'jenkin-gitlab-pipeline', url: 'http://192.168.31.79:8929/root/k8s-cicd-demo.git']] //git的配置信息
+                 )
+
+
+             }
+          }
+         stage('0.打印所有环境变量') {
+             ..... //其他的不变，省略
+         stage('8.部署到开发环境') {
+             //有一个要修改，就是sed 修改k8s-pod-deploy模板，将namespace的值改为 ${namespace} (参数化的值)
+         }
+             ..... //其他的不变，省略
+    }
+}
+```
+
+### 34.4.4 调整kubeconfig文件（为了部署在其他命名空间）
+
+上面设置的serviceaccount只有管理命名空间devops的权限，这样就无法测试多个命名空间。为了省事，我直接修改kubeconfig为admin账户配置文件，即集群管理员角色。
+
+新创建一个把`config file management`
+
+> [!Note]
+>
+> kubeconfig要修改的项：
+>
+> 1. server地址改为映射后的地址
+> 2. 跳过证书的安全  验证
+> 3. 关闭指定服务端证书
+
+```yaml
+apiVersion: v1
+clusters:
+- cluster:
+	# 3.注释指定服务端证书（因为开启2不能用3了）
+    # certificate-authority-data: base64值
+    # 1.修改地址
+    server: https://192.168.31.80:30164
+    # 2.跳过证书验证
+    insecure-skip-tls-verify: true
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    user: kubernetes-admin
+  name: kubernetes-admin@kubernetes
+current-context: kubernetes-admin@kubernetes
+kind: Config
+preferences: {}
+users:
+- name: kubernetes-admin
+  user:
+    client-certificate-data: base64值
+    client-key-data: base64值
+
+```
+
+### 34.4.5 web端触发测试
+
+1. Jenkins web端 `origin/main` + `devops-test` 触发成功
+
+2. Jenkins web端 `origin/dev` + `devops-test `**触发失败，修改jenkinsfile后触发成功**
+
+   **虽然第一个stage设置了checkout 参数化分支，但是每一个stage默认都拉取origin/main（设置的默认值）**。所以可行操作就是**1.提前关闭默认的checkout操作，2.这就需要手动checkout，在master和maven标签的节点上**。
+
+   更新后jenkinsfile文件如下：
+
+   ```groovy
+   pipeline {
+       agent none 
+       environment {
+       	...
+       }
+       options {
+           // 配置 SCM 分支
+           skipDefaultCheckout()  // 防止默认的 checkout 操作，必须加否则总是默认的
+       }
+       
+           stages {
+   
+            stage('pre.清除maven工作分区，然后checkout') {
+                //agent any //禁用了每步stage默认checkout动作，就需要用到的节点都清理好workspace
+                steps {
+                   script {
+                       parallel(
+                           "清除master工作分区，然后checkout": {
+                               node('master') {
+                                   cleanWs()  // 清除工作区
+                                   checkout scmGit(
+                                   	branches: [[name: "${branch}"]], //取自参数化构建的 git参数 名(也可以通过${env.branch}选择，也可以通过${param.branch}选择)
+                                   	extensions: [],
+                                   	userRemoteConfigs: [
+                                   	    [credentialsId: 'jenkin-gitlab-pipeline', url: 'http://192.168.31.79:8929/root/k8s-cicd-demo.git']]
+                                   )
+                               }
+                           },
+                           "清除maven工作分区，然后checkout": {
+                               node('maven') {
+                                   cleanWs()  // 清除工作区
+                                   checkout scmGit(
+                                       branches: [[name: "${branch}"]], //取自参数化构建的 git参数 名(也可以通过${env.branch}选择，也可以通过${param.branch}选择)
+                                       extensions: [],
+                                       userRemoteConfigs: [
+                                           [credentialsId: 'jenkin-gitlab-pipeline', url: 'http://192.168.31.79:8929/root/k8s-cicd-demo.git']]
+                                   )
+                               }
+                           }
+                       )
+   
+                   }
+                }
+            }
+            ...
+            stage('8.部署到开发环境') {
+                 ...
+                 //修改namespace从 ${KUBE_DEPLOY_NAMESPACE} 改为 ${namespace}，就是参数化构建在定义的选项参数 
+                 ...
+             }
+            ...
+   }
+   ```
+
+> 测试default命名空间要注意先另一个命名空间下的deploy，因为**pod模板指定的是固定nodeport**
+
+### 34.4.6 git提交触发测试
+
+> git提交触发和web端基于**参数化构建**触发不一样，需要改动jenkinsfile脚本
+
+由于使用git提交触发，则无法手动选择。所以git提交触发时**参数化构建的：git参数branch即${branch}为默认值，选项参数namespace即${namespcae}也为默认值，所以需要再次修改Jenkinsfile单独配置**。当然如果你不需要切换命名空间，写死或者是默认值即可。
+
+```groovy
+pipeline {
+    agent none
+    environment {}
+    options {
+        // 配置 SCM 分支
+        skipDefaultCheckout()  // 防止默认的 checkout 操作
+    }
+    stages {
+        stage('pre.清除maven工作分区，然后checkout') {...}//见 34.4.5
+        ...
+        stage('8.部署到开发环境') {
+            agent { label 'master'}
+            steps {
+                input(id: 'deploy-to-dev', message: '是否确认部署到 dev 开发环境')
+                configFileProvider([
+                    //一次读取两个config file manage
+                        configFile(fileId: "${KUBE_CONFIG_DEV_ID}", variable: 'KUBE_CONFIG_DEV'),
+                        configFile(fileId: "${KUBE_DEPLOY_POD_TEMPLATE_DEV_ID}", variable: 'KUBE_DEPLOY_POD_TEMPLATE_DEV')
+                    ]) {
+                    script {
+                        // ****定义命名空间变量(必须在同一stage才能读取到，environment，params中变量不能修改)
+                        def KUBE_DEPLOY_NAMESPACE = 'devops-test'
+                        if(env.gitlabBranch == 'main') {
+                            KUBE_DEPLOY_NAMESPACE = 'default' // 修改变量
+                         }
+                         echo """
+                             __________________
+                             1. sed -ri 's#namespace\\:\\s{1,}?NAMESPACE#namespace\\:\\ ${KUBE_DEPLOY_NAMESPACE}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}
+                             2. sed -ri 's#image\\:\\s{1,}?IMAGE\\:TAG#image\\:\\ ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG}-${env.BUILD_NUMBER} #g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}
+                             __________________
+                         """
+                         //替换 k8s中deploy.yaml文件中命名空间 namespace: NAMESPACE替换
+                         sh "sed -ri 's#namespace\\:\\s{1,}?NAMESPACE#namespace\\:\\ ${KUBE_DEPLOY_NAMESPACE}#g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}"
+                         //替换 k8s中deploy.yaml文件中镜像 image: IMAGE:TAG 替换
+                         sh "sed -ri 's#image\\:\\s{1,}?IMAGE\\:TAG#image\\:\\ ${HARBOR_REGISTRY_URL}/${PROJECT_HARBOR_REPO_NAME}/${PROJECT_NAME}:${PROJECT_IMAGE_TAG}-${env.BUILD_NUMBER} #g' ${KUBE_DEPLOY_POD_TEMPLATE_DEV}"
+
+                         def txt = sh(script: "cat ${KUBE_DEPLOY_POD_TEMPLATE_DEV}", returnStdout: true)
+                         echo "yaml内容如下: ${txt}"
+
+                    }
+                    sh "kubectl apply -f ${KUBE_DEPLOY_POD_TEMPLATE_DEV} --kubeconfig=${KUBE_CONFIG_DEV} " // 小心job名子带空格会导致读取不到
+                }
+            }
+            ...
+       }
+    }
+```
+
+### 34.4.7 解决k8s中pod不自动更新问题
+
+给docker镜像的tag加上，构建次数即可。否则latest一直是没检测到变化
+
+Jenkinsfile修改两处：
+
+1. build构建镜像
+2. push推送镜像
+3. pod模板中镜像
+
+### 34.4.8 pipeline环境变量注意事项
+
++ `branch=origin/dev` git参数名（参数化构建）
+
+  可以自己指定的
+
++ `GIT_BRANCH=origin/dev` 网页手动触发的，和`gitlabxxx`等二选一（不是手动触发就是git触发的意思）
+
++ `gitlabBranch=dev`  git提交操作封装的，`gitlab`开头的
+
++ `gtilabxxx`
+
+### 34.4.9 jenkins所有环境变量参考
+
+```properties
+# 打印全局变量的命令
++ printenv
+gitlabSourceRepoURL=ssh://git@192.168.31.79:2424/root/k8s-cicd-demo.git
+JENKINS_HOME=/var/jenkins_home
+JENKINS_UC_EXPERIMENTAL=https://updates.jenkins.io/experimental
+CI=true
+RUN_CHANGES_DISPLAY_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/118/display/redirect?page=changes
+gitlabAfter=64ad20741825832a2d5921dd44f86c4e01d6b4f1
+HOSTNAME=63495fa53aef
+SHLVL=0
+NODE_LABELS=built-in master
+HUDSON_URL=http://192.168.31.79:8080/
+# git参数 （参数化构建）
+branch=*
+SONAR_SERVER_URL=http://your-sonarqube-server
+PROJECT_IMAGE_TAG=latest
+HOME=/var/jenkins_home
+BUILD_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/118/
+HARBOR_CREDENTIAL_ID=jenkins-harbor
+SONAR_CREDENTIAL_ID=sonarqube-secret
+KUBE_CONFIG_DEV_ID=2f5b782a-1516-44a3-8448-8a031cd1c5aa
+HUDSON_COOKIE=a04638f6-b796-4c6f-9da6-d64af2c20c8b
+gitlabTargetBranch=main
+JENKINS_SERVER_COOKIE=durable-b0d86f2267b1c20a2a746139d495ace9f18dd38f3d6577e480e8ae9caa6dda51
+# 选项参数（参数化构建）
+namespace=devops-test
+JENKINS_UC=https://updates.jenkins.io
+gitlabSourceRepoHttpUrl=http://192.168.31.79:8929/root/k8s-cicd-demo.git
+gitlabUserUsername=root
+WORKSPACE=/var/jenkins_home/workspace/k8s-cicd-demo-pipeline
+REF=/usr/share/jenkins/ref
+HARBOR_REGISTRY_URL=dockerhub.102400000.xyz
+DOCKERFILE_ARCHIVE_DIR=JENKINS_ARCHIVE_DIR
+gitlabMergeRequestLastCommit=64ad20741825832a2d5921dd44f86c4e01d6b4f1
+NODE_NAME=built-in
+gitlabSourceRepoSshUrl=ssh://git@192.168.31.79:2424/root/k8s-cicd-demo.git
+PROJECT_NAME=k8s-cicd-demo
+RUN_ARTIFACTS_DISPLAY_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/118/display/redirect?page=artifacts
+STAGE_NAME=0.打印所有环境变量
+gitlabSourceRepoHomepage=http://192.168.31.79:8929/root/k8s-cicd-demo
+EXECUTOR_NUMBER=1
+# git触发的生成的
+gitlabBranch=main
+RUN_TESTS_DISPLAY_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/118/display/redirect?page=tests
+BUILD_DISPLAY_NAME=#118
+gitlabSourceBranch=main
+JENKINS_VERSION=2.479.1
+JENKINS_INCREMENTALS_REPO_MIRROR=https://repo.jenkins-ci.org/incrementals
+HUDSON_HOME=/var/jenkins_home
+JOB_BASE_NAME=k8s-cicd-demo-pipeline
+PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+BUILD_ID=118
+gitlabBefore=93356b37059af665c338e3cb7be6aa3b0d0c7a40
+BUILD_TAG=jenkins-k8s-cicd-demo-pipeline-118
+gitlabActionType=PUSH
+JENKINS_URL=http://192.168.31.79:8080/
+LANG=C.UTF-8
+JOB_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/
+gitlabSourceRepoName=k8s-cicd-demo
+PROJECT_HARBOR_REPO_NAME=test-devops
+gitlabSourceNamespace=Administrator
+BUILD_NUMBER=118
+JENKINS_NODE_COOKIE=0e7e1fb1-e797-4982-9d03-ec691cb527f6
+RUN_DISPLAY_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/118/display/redirect
+JENKINS_SLAVE_AGENT_PORT=50000
+HUDSON_SERVER_COOKIE=43bf7c5000fa1d72
+JOB_DISPLAY_URL=http://192.168.31.79:8080/job/k8s-cicd-demo-pipeline/display/redirect
+NEED_REPLACE_TAG=NEED_REPLACE/
+JOB_NAME=k8s-cicd-demo-pipeline
+COPY_REFERENCE_FILE_LOG=/var/jenkins_home/copy_reference_file.log
+PWD=/var/jenkins_home/workspace/k8s-cicd-demo-pipeline
+JAVA_HOME=/opt/java/openjdk
+SONAR_SCANNER_HOME=D:\Code\sonarqube-scanner-cli
+gitlabUserName=Administrator
+WORKSPACE_TMP=/var/jenkins_home/workspace/k8s-cicd-demo-pipeline@tmp
+KUBE_DEPLOY_POD_TEMPLATE_DEV_ID=a511c95a-4cd3-4373-94a7-9679353e066f
+```
+
 ## 34.5 注意事项
 
 ### 34.5.1 jenkins中需要配置gitlab,harbor,k8s,sonarqube服务信息
