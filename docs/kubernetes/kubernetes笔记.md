@@ -469,7 +469,7 @@ Pod控制器是用于管理和维护Pod的一种机制。Pod控制器本质还�
 + 稳定的持久化存储，基于volumeclaimTemplate
 + 稳定的网络标志，基于Headless Service
 + 有序部署，有序扩展  **按照Pod的0...N-1的顺序进行**，在下一个Pod运行前，它之前所有的Pod必须是Running或Ready状态，基于init containers来实现。
-+ 有序收缩，有序删除  **按照Pod的N-1...0的顺序进行**，在下一个Pod运行前，它之前所有的Pod必须是shu或Ready状态，基于init containers来实现。
++ 有序收缩，有序删除  **按照Pod的N-1...0的顺序进行**，在下一个Pod运行前，它之前所有的Pod必须是Running或Ready状态，基于init containers来实现。
 
 ***组成：***
 
@@ -647,7 +647,7 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    $sudo systemctl stop firewalld
    $sudo systemctl disable firewalld
    #关闭selinux
-   $sudo sed -i 's/SELINUX\=enforcing/SELINUX\=disabled' /etc/selinux/config # 永久关闭
+   $sudo sed -i 's/SELINUX\=enforcing/SELINUX\=disabled/' /etc/selinux/config # 永久关闭
    $sudo setenforce 0#临时
    #关闭swap k8s不推荐使用swap
    $sudo swapoff -a #临时
@@ -656,10 +656,10 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    #关闭完swap一定要重启机器
    
    #根据规划规则设置主机名
-   $sudo cat >> /etc/hosts<< EOF
-   192.168.136.151 k8s-master
-   192.168.136.152 k8s-node1
-   192.168.136.153 k8s-node2
+   $ cat << EOF|sudo tee -a /etc/hosts
+   192.168.31.71 k8s-master
+   192.168.31.72 k8s-node1
+   192.168.31.73 k8s-node2
    EOF
    
    #将桥接的IPV4流量传递到iptables的链
@@ -670,7 +670,7 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    $sudo sysctl --system #生效
    
    # 设置阿里云yum镜像源
-   $sudo cp CentOS-Base.repo CentOS-Base.repo.bak
+   $cd /etc/yum.repos.d/ && sudo cp CentOS-Base.repo CentOS-Base.repo.bak
    $sudo curl -o CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo
    $sudo yum makecache
    #时间同步
@@ -786,7 +786,7 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
    #如果第一次初始化失败,重新初始化前执行
    $sudo kubeadm reset
    $sudo kubeadm init \ #用于搭建控制面板master节点
-    --apiserver-advertise-address=192.168.136.151 \ #指定apiserver地址
+    --apiserver-advertise-address=192.168.31.71 \ #指定apiserver地址
     # dockerpull.com为第三方镜像源地址,dyrnq为docker hub用户下的镜像仓库
     --image-repository dockerpull.com/dyrnq \ #指定5大组件kube-apiserver,etcd等镜像下载地址,阿里云的registry.aliyuncs.com/google_containers\废了
     --kubernetes-version v1.23.17 \ #指定kubernetes版本
@@ -838,6 +838,15 @@ https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/
      ```
 
      这是因为没有执行`kubeadm init`就启动`kubelet`服务,`kubelet`的配置文件还没生成.必须先执行`kubeadm init`
+     
+   + kubelet疯狂提示`Error getting node" err="node \"k8s-master\" not found`
+
+     注意看是不是`kubeadm init --apiserver-advertise-address=192.168.31.71` 的**apiserver地址写错了**
+
+     参考连接:
+
+     + https://www.cnblogs.com/gongxianjin/p/17743145.html
+     + https://blog.csdn.net/with123456/article/details/132412237
 
    > + `kubeadm init`命令option参考地址 https://kubernetes.io/zh-cn/docs/reference/setup-tools/kubeadm/kubeadm-init/
    > + `--image-repository`和上面设置的`/etc/yum.repo.d/kubernetes.repo`功能不一样,`kubernetes.repo`主要用于**rpm二进制软件包kubelet,kubectl,kubeadm,kubernetes**的安装. 而`--image-repository`中指定的地址是容器镜像地址,主要用于**控制面板master节点的5大组件(kube-apiserver,etcd等等)镜像安装**
@@ -1058,9 +1067,9 @@ kubectl logs [Tab]
   $echo 'complete -o default -F __start_kubectl k' >>~/.bashrc
   ```
 
-+ 更新环境变量`source .bashrc`
++ 更新环境变量`source ~/.bashrc`
 
-## 9.3 *资源操作*
+## 9.3 *kubectl可以进行的资源操作*
 
 P25 4分14
 
@@ -1075,7 +1084,7 @@ P25 4分14
 ## 9.4 Pod与集群
 
 + 与运行的Pod交互
-+ 与节点和集权交互
++ 与节点和集群交互
 
 ## 9.5 资源类型与别名
 
@@ -1276,7 +1285,7 @@ REST API 是 Kubernetes 的基本结构。 所有操作和组件之间的通信�
 
 4. **一个命名空间namespace可以有多个独立的Node节点，同样一个Node节点可以有多个命名空间namespace**
 
-5. **service是一个逻辑对象，它本身并不会绑定到某个特点的Node**，他是集群范围内的资源。
+5. **service是一个逻辑对象，它本身并不会绑定到某个特点的Node(虚拟ip)**，他是集群范围内的资源。
 
    Service转发流量的具体步骤
 
@@ -1350,9 +1359,9 @@ c087c0bfa340   dockerpull.com/dyrnq/pause:3.6   "/pause"                 6 hours
 
 ***说明：***
 
-1. 命名空间namespace是针对整个集群而不是某个节点
+1. 命名空间namespace是针对整个集群而不是某个node节点
 
-2. 服务service是针对整个集群而不是某个节点
+2. 服务service是针对整个集群而不是某个node节点。(service依旧是namespace级别资源)
 
    ![image-20240921201554488](./_media/image-20240921201554488.png)
 
@@ -1700,7 +1709,7 @@ Pod的生命周期一共包含下面三个状态：
 + **初始化阶段，Pod的init容器运行**
 
   + 拉取镜像(三种策略always,ifnotpresent,never)
-  + 运行init容器（**按照顺序依次运行，如果有一个失败了就算Pod失败。如果有重启策略会根据，pod和init容器特有的**`restartPolcy`**重启容器，Pod**）
+  + 运行init容器（**按照顺序依次运行，如果有一个失败了就算Pod失败。如果有重启策略会根据pod和init容器特有的**`restartPolcy`**重启pod容器**）
   + 启动pause容器，做网络和存储准备
   + 准备环境变量，用于pod容器中
   + volume卷挂载
@@ -1852,7 +1861,7 @@ API 目前支持两种类型的选择算符：**基于等值的**和**基于集�
 
   ```bash
   #查看pod及标签 --show-labels显示资源（如pod）的所有标签
-  $kubectl get pod -n kube-system -a --show-labels
+  $kubectl get pod -n kube-system -A --show-labels
   #添加标签
   $kubectkl label pod nginx-demo target=test -n demo
   $kubectkl label pod nginx-demo ‘max=’ -n demo #只有键没有值的标签
@@ -1951,7 +1960,7 @@ Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）
     template: # *创建Pod的模板
       metadata: #pod的元数据
         creationTimestamp: null #pod创建时间,(k8s自动生成)
-        labels: #**pod的label(可以使用该标签筛选此Pod)
+        labels: #**pod的label(可以使用该标签定义此Pod)
           app: nginx-deploy #标签键值对
       spec: #pod的规约
         containers: #容器
@@ -1974,7 +1983,7 @@ Deployment一种为Pod和ReplicaSet提供声明式更新资源（Pod控制器）
 
   > + `metadata.labels[]` **这个是定义deploy的标签,由于筛选此deploy**
   > + `sepc.selector.matchLabels[]` **这是是RS/Pod的标签选择器,用于查找指定的RS/Pod**
-  > + `sepc.template.metadata.labels[]` **这个是定义Pod的标签,用于筛选此Pod**
+  > + `sepc.template.metadata.labels[]` **这个是定义Pod的标签,用于定义此Pod的label**
   >
   > 总结：1,3中的labels是定义，**2中selector.matchLabel是运用，用于定位下面template中的Pod即（2中label必等于3中Label）**
   >
