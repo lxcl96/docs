@@ -215,7 +215,7 @@ export -p #效果和export 一样输出当前系统环境变量
 
 [参考流程图如下(不完整正确):](shell环境变量加载流程.drawio) 
 
-<img src='img/笔记/shell环境变量加载流程.png' />
+<img src='_media/shell环境变量加载流程.png' />
 
 > + **交互式shell**: 等待用户输入,并执行相应操作的shell
 > + **非交互式shell**: 读取存放文件中的内容,并根据内容执行相应操作
@@ -424,7 +424,7 @@ ly      ALL=(ALL)       ALL # 紧跟root
 
 [Linux 命令大全 | 菜鸟教程 (runoob.com)](https://www.runoob.com/linux/linux-command-manual.html)
 
-<img src='img/笔记/linux常用命令大全.png' />
+![](_media/linux常用命令大全.png)
 
 # 12.shell参数
 
@@ -457,7 +457,7 @@ read i j < <(echo 1 1) #终端可以，shell中不行
 
 # 15. linux中引号
 
-+ 单引号 "", 单引号中的字符串就是字符串，**不会被转义，解析成变量**
++ 单引号 '', 单引号中的字符串就是字符串，**不会被转义，解析成变量**
 + 双引号"" ,双引号中的字符串**会被转义，会解析成变量**
 + 反引号``,把内部字符串当作命令直接执行，返回值就是字符串执行后的返回值
 
@@ -602,3 +602,24 @@ printf "%.2f",$key
 # 22. 重定向`>`是在本地shell解释的
 
 重新向`>`或`>>`,`<`等都是在本地shell进行解释的,所以如果**想直接容器外面直接执行容器内命令(包含重定向符号的)**使用`sh -c '命令'`
+
+# 23. EOF详解
+
+简单记EOF内容从第二行开始
+
+```shell
+# 正确写法
+cat <<EOF|sudo tee -a /etc/hosts #sudo tee是cat的一部分 (必须放在首行)
+192.168.31.71 k8s-master
+192.168.31.72 k8s-node1
+192.168.31.73 k8s-node2
+EOF
+
+# 错误写法
+cat <<EOF
+192.168.31.71 k8s-master
+192.168.31.72 k8s-node1
+192.168.31.73 k8s-node2
+EOF |sudo tee -a /etc/hosts # 会卡住，因为cat命令已经结束
+```
+
