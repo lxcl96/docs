@@ -1753,7 +1753,7 @@ Ubuntu默认没有安装sshd服务,所以需要自己安装 `apt install openssh
 | ------------------- | ------------------------------------------------------------ | ---------------- |
 | `/var/log/boot.log` | 系统启动日志                                                 |                  |
 | `/var/log/cron`     | 记录与定时任务相关的日志                                     |                  |
-| /var/log/cups       | 记录打印(机)信息的日志                                       |                  |
+| `/var/log/cups`     | 记录打印(机)信息的日志                                       |                  |
 | `/var/log/dmesg`    | 记录系统在开机时内核自检的信息                               |                  |
 | `/var/log/btmp`     | 记录错误登录的日志.这是一个二进制文件无法直接查看,需要直接使用`lastb`命令查看该文件(类似于`dmesg`直接就能查看) | BadTimeLogging   |
 | `/var/log/lastlog`  | 记录系统中所有用户最后一次的登陆时间日志.该文件也是一个二进制文件,需要使用`lastlog`查看 | LastLoginLogging |
@@ -2102,7 +2102,7 @@ LVM最大的特点就是可以对磁盘进行动态管理。因为逻辑卷的�
    $sudo mount /dev/ubuntu/lv_swap
    ```
 
-7. **扩展逻辑卷** 
+7. **扩展逻辑卷组** 
 
    ```bash
    $sudo fdisk /dev/sda #创建分区如sda6 
@@ -2112,7 +2112,14 @@ LVM最大的特点就是可以对磁盘进行动态管理。因为逻辑卷的�
 
 8. **调整逻辑卷大小**
 
-   待更新
+   ```bash
+   # 扩展逻辑卷root即/dev/centos/root 使用当前卷组所有剩余空间
+   $ sudo lvextend -l +100%FREE /dev/centos/root
+   # 扩展文件系统(必须,否则容量不更新) 以xfs文件系统为例子
+   $ xfs_growfs / # 注意根 / 不同的文件系统不同的命令
+   # 验证 
+   $ df -h
+   ```
 
 9. **删除逻辑卷**
 
